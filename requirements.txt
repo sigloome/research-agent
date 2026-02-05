@@ -1,0 +1,30 @@
+# Core Backend
+fastapi>=0.104.0
+uvicorn>=0.24.0
+python-dotenv>=1.0.0
+
+# Structured Logging
+structlog>=24.0.0
+
+# HTTP & Parsing
+requests>=2.31.0
+feedparser>=6.0.0
+httpx>=0.25.0
+
+# PDF Processing
+PyPDF2>=3.0.0
+# PyMuPDF>=1.23.0  # Optional: better PDF parsing (requires system deps)
+
+# Claude Agent SDK
+claude_agent_sdk>=0.1.0
+
+# Database
+# sqlite3 is built-in
+
+# Optional: Z-Library integration
+# Requires zlibrary-mcp to be set up separately
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-asyncio>=0.21.0

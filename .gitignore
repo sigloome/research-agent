@@ -1,0 +1,45 @@
+# Environment and secrets
+.env
+.env.*
+secrets/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# System
+.DS_Store
+
+# Frontend
+frontend/node_modules/
+frontend/.vite/
+frontend/dist/
+
+# Logs directory
+logs/
+*.log
+
+# Data directory (database and local files)
+data/
+
+# Downloaded books
+downloads/
+
+# npm
+.npm-cache/
+
+# IDE
+.idea/
+.vscode/
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Misc
+*.bak
+*.tmp
+tmp/
+test-results/
