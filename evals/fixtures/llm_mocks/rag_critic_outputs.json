@@ -1,0 +1,43 @@
+{
+  "RET-07": {
+    "labeled_pairs": [
+      {"answer_score": 0.92, "distractor_score": 0.31},
+      {"answer_score": 0.88, "distractor_score": 0.42},
+      {"answer_score": 0.73, "distractor_score": 0.25},
+      {"answer_score": 0.81, "distractor_score": 0.77},
+      {"answer_score": 0.79, "distractor_score": 0.22}
+    ]
+  },
+  "RET-08": {
+    "valid_outputs": [
+      "{\"score\":0.8,\"reasoning\":\"Directly answers the query.\"}",
+      "{\"score\":0.2,\"reasoning\":\"Only related work context.\"}"
+    ],
+    "malformed_outputs": [
+      "score=0.9 reason=great",
+      "{\"score\":\"bad\",\"reasoning\":42",
+      ""
+    ]
+  },
+  "AGT-11": {
+    "boundary_cases": [
+      {"score": 0.49, "expected_include": false},
+      {"score": 0.50, "expected_include": true},
+      {"score": 0.51, "expected_include": true}
+    ]
+  },
+  "AGT-12": {
+    "pairwise_cases": [
+      {"positive_score": 0.91, "negative_score": 0.35},
+      {"positive_score": 0.87, "negative_score": 0.33},
+      {"positive_score": 0.76, "negative_score": 0.70},
+      {"positive_score": 0.82, "negative_score": 0.40},
+      {"positive_score": 0.95, "negative_score": 0.20},
+      {"positive_score": 0.78, "negative_score": 0.44},
+      {"positive_score": 0.73, "negative_score": 0.69},
+      {"positive_score": 0.90, "negative_score": 0.30},
+      {"positive_score": 0.85, "negative_score": 0.48},
+      {"positive_score": 0.92, "negative_score": 0.60}
+    ]
+  }
+}

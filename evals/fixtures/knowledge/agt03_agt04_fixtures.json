@@ -1,0 +1,16 @@
+{
+  "AGT-03": {
+    "mocked_summary": "User has recently been exploring retrieval-augmented generation for LLM agents.",
+    "weekly_live_scores": [0.9, 0.8, 0.85, 0.8, 0.9]
+  },
+  "AGT-04": {
+    "output_text": "User is focused on model evaluation design and retrieval quality.",
+    "denylist": [
+      "sk-",
+      "AKIA",
+      "/Users/",
+      "/home/",
+      "password"
+    ]
+  }
+}

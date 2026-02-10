@@ -1,0 +1,18 @@
+{
+  "RET-01": {
+    "tool_sequence": ["read_paper", "WebSearch", "WebFetch"]
+  },
+  "RET-02": {
+    "response_text": "The method is transformer-based [Vaswani et al.](/paper/1706.03762)."
+  },
+  "RET-03": {
+    "tool_sequence": ["Skill:knowledge.paper.read", "WebSearch"]
+  },
+  "RET-04": {
+    "response_text": "I could not find that local paper id in the library, so I used web fallback sources.",
+    "tool_sequence": ["read_paper", "WebSearch", "WebFetch"]
+  },
+  "RET-05": {
+    "response_text": "Here is the clean answer with no hidden content and no local file paths."
+  }
+}

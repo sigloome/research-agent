@@ -1,0 +1,27 @@
+{
+  "AGT-07": {
+    "cases": [
+      {"fallback_ok": true},
+      {"fallback_ok": true},
+      {"fallback_ok": true}
+    ]
+  },
+  "AGT-13": {
+    "cases": [
+      {"envelope_valid": true, "uncaught_exception": false},
+      {"envelope_valid": true, "uncaught_exception": false}
+    ]
+  },
+  "AGT-14": {
+    "valid_mode_cases": [
+      {"contract_ok": true},
+      {"contract_ok": true},
+      {"contract_ok": true},
+      {"contract_ok": true}
+    ],
+    "invalid_mode_cases": [
+      {"contract_ok": true},
+      {"contract_ok": true}
+    ]
+  }
+}

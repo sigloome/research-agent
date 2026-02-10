@@ -1,0 +1,39 @@
+{
+  "AGT-05": {
+    "payloads": [
+      {
+        "tags": ["LLM", "RAG"],
+        "summary_main_ideas": "Uses retrieval to ground responses.",
+        "summary_methods": "Hybrid sparse+dense retriever with reranker.",
+        "summary_results": "Improves grounded factuality by 12%.",
+        "summary_limitations": "Depends on high-quality chunking."
+      },
+      {
+        "tags": ["Evaluation"],
+        "summary_main_ideas": "Proposes deterministic-first benchmark governance.",
+        "summary_methods": "Outcome-based multi-oracle checks.",
+        "summary_results": "Reduces flaky CI failures.",
+        "summary_limitations": "Requires fixture maintenance."
+      }
+    ]
+  },
+  "AGT-06": {
+    "slot_checks": [
+      {"expected": ["hybrid retriever", "reranker", "factuality"], "matched": ["hybrid retriever", "reranker", "factuality"]},
+      {"expected": ["deterministic-first", "multi-oracle", "flaky"], "matched": ["deterministic-first", "multi-oracle"]}
+    ],
+    "contradiction_count": 0
+  },
+  "AGT-10": {
+    "fallback_objects": [
+      {
+        "tags": ["Error"],
+        "summary_main_ideas": "Failed to generate summary.",
+        "summary_methods": "",
+        "summary_results": "",
+        "summary_limitations": ""
+      }
+    ],
+    "crash_count": 0
+  }
+}

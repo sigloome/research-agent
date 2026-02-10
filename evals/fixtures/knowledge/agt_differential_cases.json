@@ -1,0 +1,11 @@
+{
+  "AGT-02": [
+    {"invariant_compliant": true, "forbidden_style_regression": false},
+    {"invariant_compliant": true, "forbidden_style_regression": false}
+  ],
+  "AGT-08": [
+    {"signal_direction_ok": true},
+    {"signal_direction_ok": true},
+    {"signal_direction_ok": true}
+  ]
+}

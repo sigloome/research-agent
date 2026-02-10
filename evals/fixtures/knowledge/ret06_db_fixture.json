@@ -1,0 +1,22 @@
+{
+  "records": [
+    {
+      "paper_id": "2401.00001",
+      "summary_main_ideas": "A sparse attention mechanism for long context.",
+      "summary_methods": "Block-local sparse attention with learned routing.",
+      "summary_results": "Outperforms dense baseline on long-context QA.",
+      "summary_limitations": "Performance drops on short prompts."
+    },
+    {
+      "paper_id": "2401.00002",
+      "summary_main_ideas": "Retrieval-guided planning for agent tool use.",
+      "summary_methods": "Planner+executor with deterministic route constraints.",
+      "summary_results": "Improves task success by 9 points.",
+      "summary_limitations": "Needs curated tool metadata."
+    }
+  ],
+  "slot_checks": [
+    {"expected": ["sparse attention", "long context", "routing"], "matched": ["sparse attention", "long context", "routing"]},
+    {"expected": ["planner", "executor", "tool metadata"], "matched": ["planner", "executor"]}
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "chunks": [
+    "Visible intro. <thinking>internal ",
+    "plan <private>/Users/bytedance/secret.txt</private>",
+    " should never leak</thinking> Final answer.",
+    " <debug>trace",
+    " id=abc",
+    "</debug>",
+    " trailing <think",
+    "ing>hidden tail"
+  ],
+  "expected_visible_substrings": [
+    "Visible intro.",
+    "Final answer."
+  ]
+}

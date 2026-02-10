@@ -52,6 +52,7 @@ Other features or services required.
 | [book-management.md](./book-management.md) | Active | Book download and management |
 | [chat-interface.md](./chat-interface.md) | Active | Chat UI and streaming |
 | [user-preferences.md](./user-preferences.md) | Active | Preference learning |
+| [agent-evaluation-standard.md](./agent-evaluation-standard.md) | Active | Deterministic-first, flexible-oracle agent eval policy |
 
 ## Adding New Features
 
