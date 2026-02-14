@@ -43,3 +43,6 @@ htmlcov/
 *.tmp
 tmp/
 test-results/
+
+# Local Claude worktrees
+.claude/worktrees/
