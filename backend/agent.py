@@ -267,11 +267,10 @@ class MainAgent:
                 model=self.model,
                 env=(
                     {
-                        "ANTHROPIC_API_KEY": self.api_key,
-                        "ANTHROPIC_BASE_URL": self.base_url,
+                        "ANTHROPIC_API_KEY": self.api_key or os.getenv("ANTHROPIC_API_KEY", ""),
+                        "ANTHROPIC_AUTH_TOKEN": os.getenv("ANTHROPIC_AUTH_TOKEN", ""),
+                        "ANTHROPIC_BASE_URL": self.base_url or "",
                     }
-                    if self.api_key
-                    else None
                 ),
                 system_prompt=self.base_system_prompt,
                 allowed_tools=["WebSearch", "WebFetch", "Task", "Read", "Write", "Bash", "Skill"],

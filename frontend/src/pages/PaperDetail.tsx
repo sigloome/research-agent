@@ -5,7 +5,18 @@ import ReactMarkdown from 'react-markdown';
 import useSWR from 'swr';
 
 // Fetcher for SWR
-const fetcher = (url: string) => fetch(url).then((res) => res.json());
+const fetcher = async (url: string) => {
+    const res = await fetch(url);
+    if (!res.ok) {
+        const error = new Error('An error occurred while fetching the data.');
+        // @ts-ignore
+        error.info = await res.json();
+        // @ts-ignore
+        error.status = res.status;
+        throw error;
+    }
+    return res.json();
+};
 
 interface Paper {
     id: string;
@@ -71,7 +82,49 @@ export default function PaperDetail() {
     // Highlight snippet from URL hash
     // Implementation of precise citation highlighting will go here later
 
-    if (error) return <div className="p-8 text-red-500">Failed to load paper details.</div>;
+    const handleRequestFetch = () => {
+        if (!id) return;
+        // Navigate to chat with a pre-filled message
+        // using the state to pass the message
+        navigate('/', { state: { initialMessage: `Fetch paper with ID ${id} from ArXiv` } });
+    };
+
+    if (error) {
+        // Check if 404
+        // @ts-ignore
+        if (error.status === 404 || error.message?.includes('404')) {
+            return (
+                <div className="flex flex-col items-center justify-center p-12 text-center text-warmstone-600 bg-cream h-full">
+                    <div className="bg-white p-8 rounded-2xl shadow-sm border border-warmstone-200 max-w-md w-full">
+                        <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4 text-blue-600">
+                            <Sparkles size={32} />
+                        </div>
+                        <h2 className="text-xl font-bold text-warmstone-900 mb-2">Paper Not in Library</h2>
+                        <p className="text-warmstone-500 mb-6">
+                            This paper ({id}) hasn't been added to your local library yet.
+                        </p>
+
+                        <div className="flex flex-col gap-3">
+                            <button
+                                onClick={handleRequestFetch}
+                                className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                            >
+                                <Sparkles size={18} />
+                                Ask Agent to Fetch
+                            </button>
+                            <button
+                                onClick={() => navigate('/')}
+                                className="w-full py-2.5 px-4 bg-white border border-warmstone-300 text-warmstone-700 font-medium rounded-lg hover:bg-warmstone-50 transition-colors"
+                            >
+                                Back to Library
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+        return <div className="p-8 text-red-500">Failed to load paper details.</div>;
+    }
     if (!paper) return <div className="p-8 text-warmstone-500">Loading paper...</div>;
 
     const hasAISummary = !!paper.summary_main_ideas;

@@ -1,10 +1,14 @@
 import json
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
 
 # Add project root to path for imports
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))  # noqa: E402
+
+# Load environment variables
+load_dotenv(PROJECT_ROOT / ".env")
 
 from typing import Any, Dict, List, Optional
 

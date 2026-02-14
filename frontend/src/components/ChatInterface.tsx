@@ -345,6 +345,10 @@ function parseContent(fullText: string) {
 // We need to pass navigate and simple handlers, but components prop in ReactMarkdown
 // accepts a dictionary. For specialized handlers that depend on scope (like navigate),
 // we can keep them inside but memoized. However, moving static parts out is better.
+// Markdown components definition moved outside to prevent re-creation
+// We need to pass navigate and simple handlers, but components prop in ReactMarkdown
+// accepts a dictionary. For specialized handlers that depend on scope (like navigate),
+// we can keep them inside but memoized. However, moving static parts out is better.
 const createMarkdownComponents = (navigate: any, onLibrarySearch: any) => ({
   h1: ({ children }: any) => <h1 className="text-xl font-bold text-stone-900 mb-3">{children}</h1>,
   h2: ({ children }: any) => <h2 className="text-lg font-semibold text-stone-900 mt-4 mb-2">{children}</h2>,
@@ -366,6 +370,16 @@ const createMarkdownComponents = (navigate: any, onLibrarySearch: any) => ({
   a: ({ href, children }: any) => {
     const isLibraryLink = href?.startsWith('/library/');
     const isPaperLink = href?.startsWith('/paper/');
+
+    // Check for ArXiv links to intercept
+    let arxivId = null;
+    if (href && (href.includes('arxiv.org/abs/') || href.includes('arxiv.org/pdf/'))) {
+      const match = href.match(/arxiv\.org\/(?:abs|pdf)\/([^/?#]+)/);
+      if (match) {
+        arxivId = match[1];
+      }
+    }
+
     const handleClick = (e: React.MouseEvent) => {
       if (isLibraryLink && onLibrarySearch) {
         e.preventDefault();
@@ -375,6 +389,9 @@ const createMarkdownComponents = (navigate: any, onLibrarySearch: any) => ({
       } else if (isPaperLink && href) {
         e.preventDefault();
         navigate(href);
+      } else if (arxivId) {
+        e.preventDefault();
+        navigate(`/paper/${arxivId}`);
       }
     };
 
@@ -383,8 +400,8 @@ const createMarkdownComponents = (navigate: any, onLibrarySearch: any) => ({
         href={href}
         onClick={handleClick}
         className="text-blue-600 underline hover:text-blue-800 cursor-pointer"
-        target={isLibraryLink || isPaperLink ? undefined : "_blank"}
-        rel={isLibraryLink || isPaperLink ? undefined : "noreferrer"}
+        target={isLibraryLink || isPaperLink || arxivId ? undefined : "_blank"}
+        rel={isLibraryLink || isPaperLink || arxivId ? undefined : "noreferrer"}
       >
         {children}
       </a>
@@ -405,6 +422,69 @@ const createMarkdownComponents = (navigate: any, onLibrarySearch: any) => ({
   },
   table: ({ children }: any) => <div className="overflow-x-auto my-4 border border-stone-200 rounded-lg"><table className="min-w-full divide-y divide-stone-200 text-sm text-stone-700">{children}</table></div>,
 });
+
+
+
+
+const UserMessage = memo(function UserMessage({ content }: { content: string }) {
+  return <div className="bg-cream-200 rounded-xl px-4 py-3 text-warmstone-800 text-sm shadow-sm">{content}</div>
+});
+
+
+interface Message {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+// Paper context for "Ask about this paper" feature
+interface PaperContext {
+  paperId: string;
+  paperTitle: string;
+  suggestions: string[];
+}
+
+// Active tool indicator
+interface ActiveTool {
+  id: string;
+  name: string;
+  description: string;
+}
+
+// Active Tool Indicator Component
+const ActiveToolIndicator = memo(function ActiveToolIndicator({ tools }: { tools: ActiveTool[] }) {
+  if (tools.length === 0) return null;
+
+  const currentTool = tools[tools.length - 1];
+
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg shadow-sm animate-in fade-in slide-in-from-bottom-2 duration-300">
+      <div className="relative">
+        <Loader2 size={16} className="text-blue-600 animate-spin" />
+        <span className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full animate-ping" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <span className="text-sm font-medium text-blue-800 truncate">
+          {currentTool.name}
+        </span>
+        <p className="text-xs text-blue-600 truncate">
+          {currentTool.description}
+        </p>
+      </div>
+      {tools.length > 1 && (
+        <span className="text-xs text-blue-500 bg-blue-100 px-2 py-0.5 rounded-full">
+          +{tools.length - 1} more
+        </span>
+      )}
+    </div>
+  );
+});
+
+// Export handle type for parent components to use
+export interface ChatInterfaceHandle {
+  sendMessage: (content: string) => Promise<void>;
+  prepareQuestionAboutPaper: (paperId: string, paperTitle: string) => void;
+}
 
 
 const AssistantMessage = memo(function AssistantMessage({ content, onLibrarySearch }: { content: string; onLibrarySearch?: (query: string) => void }) {
@@ -434,6 +514,7 @@ const AssistantMessage = memo(function AssistantMessage({ content, onLibrarySear
       setIsSaving(false);
     }
   }, [cleanContent]);
+
 
   // Memoize split content
   const { chatter, reportContent } = useMemo(() => {
@@ -510,66 +591,6 @@ const AssistantMessage = memo(function AssistantMessage({ content, onLibrarySear
   )
 });
 
-const UserMessage = memo(function UserMessage({ content }: { content: string }) {
-  return <div className="bg-cream-200 rounded-xl px-4 py-3 text-warmstone-800 text-sm shadow-sm">{content}</div>
-});
-
-
-interface Message {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-// Paper context for "Ask about this paper" feature
-interface PaperContext {
-  paperId: string;
-  paperTitle: string;
-  suggestions: string[];
-}
-
-// Active tool indicator
-interface ActiveTool {
-  id: string;
-  name: string;
-  description: string;
-}
-
-// Active Tool Indicator Component
-const ActiveToolIndicator = memo(function ActiveToolIndicator({ tools }: { tools: ActiveTool[] }) {
-  if (tools.length === 0) return null;
-
-  const currentTool = tools[tools.length - 1];
-
-  return (
-    <div className="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg shadow-sm animate-in fade-in slide-in-from-bottom-2 duration-300">
-      <div className="relative">
-        <Loader2 size={16} className="text-blue-600 animate-spin" />
-        <span className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full animate-ping" />
-      </div>
-      <div className="flex-1 min-w-0">
-        <span className="text-sm font-medium text-blue-800 truncate">
-          {currentTool.name}
-        </span>
-        <p className="text-xs text-blue-600 truncate">
-          {currentTool.description}
-        </p>
-      </div>
-      {tools.length > 1 && (
-        <span className="text-xs text-blue-500 bg-blue-100 px-2 py-0.5 rounded-full">
-          +{tools.length - 1} more
-        </span>
-      )}
-    </div>
-  );
-});
-
-// Export handle type for parent components to use
-export interface ChatInterfaceHandle {
-  sendMessage: (content: string) => Promise<void>;
-  prepareQuestionAboutPaper: (paperId: string, paperTitle: string) => void;
-}
-
 const ChatInterface = forwardRef<ChatInterfaceHandle, ChatInterfaceProps>(({ onPaperAction, onLibrarySearch, isExpanded, onToggleExpand }, ref) => {
   // Local state for messages and input
   const [messages, setMessages] = useState<Message[]>([]);
@@ -577,7 +598,7 @@ const ChatInterface = forwardRef<ChatInterfaceHandle, ChatInterfaceProps>(({ onP
   const [isLoading, setIsLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>(DEFAULT_SUGGESTIONS);
   const [paperContext, setPaperContext] = useState<PaperContext | null>(null);
-  
+
   // Active tool tracking - shows current tool/MCP/skill in use
   const [activeTools, setActiveTools] = useState<ActiveTool[]>([]);
 
@@ -773,7 +794,7 @@ const ChatInterface = forwardRef<ChatInterfaceHandle, ChatInterfaceProps>(({ onP
                 if (data.type === 'tool_start' || data.type === 'tool_usage') {
                   const toolName = data.tool || 'Tool';
                   const description = data.description || `Running ${toolName}...`;
-                  
+
                   // Add to active tools (show in UI indicator)
                   setActiveTools(prev => {
                     // Avoid duplicates by tool name
@@ -786,6 +807,7 @@ const ChatInterface = forwardRef<ChatInterfaceHandle, ChatInterfaceProps>(({ onP
                     }];
                   });
                   // Don't append text - the indicator shows the tool status
+                  // NOTE: We do NOT clear tools here; we wait for '0:' or 'meta' or stream end
                 } else if (data.type === 'research_event') {
                   // Raw protocol marker (e.g. *PlanInit*...)
                   textToAppend = `\n\n${data.raw}\n\n`;
@@ -815,16 +837,20 @@ const ChatInterface = forwardRef<ChatInterfaceHandle, ChatInterfaceProps>(({ onP
           }
         }
       }
-
       onPaperAction?.();
-
-      // Refetch suggestions after message to get updated personalized suggestions
+      // Refetch suggestions after message
       fetchSuggestions();
-    } catch (error) {
-      console.error('Chat error:', error);
+    } catch (e) {
+      console.error("Chat error:", e);
+      // Show error message
+      setMessages(prev => [...prev.slice(0, -1), {
+        id: `error-${Date.now()}`,
+        role: 'assistant',
+        content: `Error: ${e instanceof Error ? e.message : String(e)}`
+      }]);
     } finally {
       setIsLoading(false);
-      // Clear any remaining active tools when stream ends
+      // Ensure active tool indicator is cleared when stream ends
       setActiveTools([]);
     }
   };
