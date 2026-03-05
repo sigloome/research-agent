@@ -1,8 +1,7 @@
 import json
 import os
 from pathlib import Path
-from typing import AsyncGenerator, Optional, Dict, Any, List
-from urllib.parse import urljoin
+from typing import Optional, Dict, Any, List
 
 import httpx
 from claude_agent_sdk import ClaudeAgentOptions, SandboxSettings
@@ -17,8 +16,6 @@ def generate_tool_description(tool_name: str, tool_input: Dict[str, Any]) -> str
     """
     Generate a human-readable description of what a tool is doing based on its name and input.
     """
-    input_str = json.dumps(tool_input) if tool_input else "{}"
-    
     # WebSearch
     if tool_name == "WebSearch":
         query = tool_input.get("query", tool_input.get("search_term", ""))
@@ -141,6 +138,23 @@ class MainAgent:
         2. Use **WebFetch** to read detailed content from promising URLs
         3. Synthesize findings into a clear, comprehensive response
         4. Include sources with URLs when available
+
+        ## Skill Routing Policy (MANDATORY)
+
+        Prefer project-local skills before generic web tools when the task matches them.
+
+        - Use **Skill: knowledge** for:
+          - paper/library lookup, local retrieval, paper analysis/summaries
+          - RAG/graph retrieval over local knowledge
+          - local research workflows that can be answered from project data
+        - Use **Skill: preference** for:
+          - user preference signals, topic tendencies, preference-aware recommendations
+          - tasks that require reading or applying learned user profile/history context
+
+        If the user asks what skills/capabilities are available, use the Skill tool to enumerate skills first,
+        then answer with what is actually available.
+
+        Only fall back to WebSearch/WebFetch first when local/project skills cannot satisfy the request.
         
         ## Important Guidelines
         
@@ -293,7 +307,8 @@ class MainAgent:
 
             options = ClaudeAgentOptions(
                 cwd=str(self.cwd),
-                setting_sources=["project"],
+                # Enable automatic SDK-native skill loading from both user and project scopes.
+                setting_sources=["user", "project"],
                 model=self.model,
                 env=sdk_env,
                 # Use composed prompt so profile/history wiring is active in runtime.
@@ -398,6 +413,29 @@ class MainAgent:
         conversation_history: Optional[List[Dict[str, str]]],
     ) -> str:
         full_query = query
+        lower_query = (query or "").lower()
+
+        # Enforce local-skill-first routing for research-relevant asks.
+        skill_routing_terms = [
+            "skill",
+            "paper",
+            "library",
+            "knowledge",
+            "rag",
+            "preference",
+            "profile",
+            "history",
+            "recommend",
+        ]
+        if any(term in lower_query for term in skill_routing_terms):
+            full_query = (
+                "[MANDATORY TOOL ROUTING]\n"
+                "1) Call Skill tool to enumerate available skills before final answer.\n"
+                "2) Prefer knowledge/preference skills for local/project queries.\n"
+                "3) If those skills are unavailable, explicitly state that in output.\n\n"
+                f"User request: {query}"
+            )
+
         if conversation_history and len(conversation_history) > 0:
             history_context = "\n\n[Prior Conversation History - Please continue this conversation]\n"
             for msg in conversation_history:

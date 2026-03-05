@@ -150,6 +150,20 @@ Reports are stored under:
 - `tmp/runs/evolution/<timestamp>.md`
 - `tmp/runs/evolution/index.md`
 
+### Claude SDK Skill Auto-Loading Check
+
+To enforce SDK-native (non-manual) skill usage in runtime agent config:
+
+```bash
+python scripts/check_claude_skill_config.py
+```
+
+This verifies:
+
+1. `setting_sources=["user", "project"]` in `backend/agent.py`
+2. `allowed_tools` includes `"Skill"`
+3. `cwd` is set to project root (`self.cwd`) for proper project-skill discovery
+
 ## Local TODO Continuity
 
 Maintain local TODO continuity files so work can resume in new sessions:
