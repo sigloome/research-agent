@@ -41,6 +41,24 @@ Agents must preserve intermediate results so future agent runs can continue reli
 3. Before merge, promote any behavior-affecting decisions from local notes into tracked artifacts.
 4. Do not leave critical rationale or acceptance criteria only in ephemeral agent messages.
 
+## TODO Management Rule (Mandatory)
+
+Coding agents must maintain local TODO continuity files for every implementation session.
+
+1. Required local files:
+   - `/Users/bytedance/code/anti-demo/tmp/todos/active.md`
+   - `/Users/bytedance/code/anti-demo/tmp/todos/handoff.md`
+   - `/Users/bytedance/code/anti-demo/tmp/todos/done.md`
+2. Session-start requirement:
+   - Read `tmp/todos/active.md` and `tmp/todos/handoff.md` before making new plans.
+3. Session-end requirement:
+   - Update `tmp/todos/handoff.md` with current state and immediate next task.
+   - Move completed items from `active.md` to `done.md`.
+4. Priority rule:
+   - If `active.md` has unfinished P0 items, agents should execute those first unless the user explicitly overrides.
+5. Sync rule:
+   - Any local TODO item that becomes a durable requirement must be promoted into tracked OpenSpec/spec artifacts before merge.
+
 ## When Updating Customized Prompt Paths
 
 If a change touches any custom prompt/agent path, update:

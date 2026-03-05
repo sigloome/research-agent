@@ -149,3 +149,17 @@ Reports are stored under:
 
 - `tmp/runs/evolution/<timestamp>.md`
 - `tmp/runs/evolution/index.md`
+
+## Local TODO Continuity
+
+Maintain local TODO continuity files so work can resume in new sessions:
+
+1. `tmp/todos/active.md` for prioritized unfinished items
+2. `tmp/todos/handoff.md` for latest context and first next task
+3. `tmp/todos/done.md` for completed milestones
+
+Expected routine:
+
+1. Read `active.md` and `handoff.md` before starting implementation.
+2. Update `handoff.md` at end of session.
+3. Move completed items from `active.md` to `done.md`.

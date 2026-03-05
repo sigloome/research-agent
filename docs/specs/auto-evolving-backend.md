@@ -187,6 +187,21 @@ Any decision made in local working artifacts that affects behavior, contracts, o
 
 No merge is valid if only local notes contain the rationale or acceptance criteria.
 
+## TODO Continuity Rule (Required)
+
+To ensure seamless continuation across sessions, coding agents MUST maintain local TODO files:
+
+1. `tmp/todos/active.md` for prioritized unfinished work.
+2. `tmp/todos/handoff.md` for session handoff context and immediate next action.
+3. `tmp/todos/done.md` for completed local milestones.
+
+Agent behavior requirements:
+
+1. At session start, read `active.md` and `handoff.md`.
+2. At session end, update `handoff.md` and move completed work from `active.md` to `done.md`.
+3. Prioritize unfinished P0 items from `active.md` unless user explicitly reprioritizes.
+4. Promote durable TODO decisions into tracked OpenSpec/spec artifacts before merge.
+
 ## Required Definition of Done (Per Feature)
 
 A feature is complete only if all are true:
