@@ -90,6 +90,19 @@ Validation command:
 python scripts/check_openspec_tasks.py
 ```
 
+For any change under `openspec/changes/<change-id>/design.md`, include:
+
+1. `## Risks / Trade-offs`
+2. `## Rollback Plan`
+3. `## Ownership` (owner/reviewer/oncall)
+4. `## Metrics Instrumentation` (metric/source/threshold/window)
+
+Validation command:
+
+```bash
+python scripts/check_openspec_design.py
+```
+
 Enable local commit-time enforcement once per clone:
 
 ```bash
@@ -101,4 +114,5 @@ This installs a local `pre-commit` hook that runs:
 ```bash
 python scripts/check_openspec_proposals.py --changed
 python scripts/check_openspec_tasks.py --changed
+python scripts/check_openspec_design.py --changed
 ```

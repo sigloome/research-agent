@@ -39,3 +39,34 @@ We will map the DB `chat_id` directly to the `ClaudeSDKClient`'s `session_id`.
 **Risk**: SDK Process Restart
 - If the python backend restarts, the `ClaudeSDKClient` might lose its in-memory context (e.g. variables defined in a REPL).
 - **Mitigation**: The *transcript* is safe in our DB. The user can see the history. If they continue the conversation, the Agent will see the *new* messages but might have lost "deep" state (variables). This is an acceptable trade-off for V1. We can potentially "replay" history to the SDK on reconnect in V2 if needed, but for now we treat the SDK session as a best-effort context container.
+
+## Rollback Plan
+
+1. Trigger conditions for rollback:
+   - Chat persistence introduces data-integrity regressions (duplicate/missing messages above threshold).
+   - API error rate increases beyond agreed risk metric after deployment.
+2. Rollback steps:
+   - Revert multi-chat API wiring to prior single-session flow.
+   - Disable sidebar/session switching paths in frontend if needed.
+   - Keep existing DB data untouched to avoid destructive migration risk.
+3. Validation after rollback:
+   - Verify `/api/chat` basic send/receive path works.
+   - Verify no new 5xx regressions in chat endpoints.
+   - Verify frontend can send and receive messages normally.
+
+## Ownership
+
+1. Owner: Backend chat/session maintainers for implementation and defect triage.
+2. Reviewer: Full-stack maintainer covering backend+frontend chat flow.
+3. Oncall: Backend service oncall responsible for rollback execution.
+
+## Metrics Instrumentation
+
+1. Metric: Chat message persistence correctness rate.
+   - Source: DB-state integration checks and chat API tests.
+   - Threshold: `>= 99.9%` correctness.
+   - Window: per PR run and 14-day post-deploy window.
+2. Metric: Chat API error rate (`/api/chat`, `/api/chats/*`).
+   - Source: backend logs/monitoring counters.
+   - Threshold: no increase above `+0.5%` absolute.
+   - Window: 24-hour and 7-day rolling windows.

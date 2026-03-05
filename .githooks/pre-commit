@@ -7,4 +7,7 @@ python scripts/check_openspec_proposals.py --changed
 echo "Running local OpenSpec tasks checks..."
 python scripts/check_openspec_tasks.py --changed
 
+echo "Running local OpenSpec design checks..."
+python scripts/check_openspec_design.py --changed
+
 echo "pre-commit checks passed."
