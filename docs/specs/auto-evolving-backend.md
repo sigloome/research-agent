@@ -203,6 +203,7 @@ A feature is complete only if all are true:
 
 1. **Phase 0: Governance First**
    - Apply this specification, templates, and local commit-time checks.
+   - Use `scripts/run_evolution_cycle.sh` to produce deterministic local run reports in `tmp/runs/evolution/`.
 2. **Phase 1: Assisted Evolution**
    - Auto-generate proposals/candidates; human approves promotions.
 3. **Phase 2: Constrained Autonomy**

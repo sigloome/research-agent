@@ -130,3 +130,22 @@ python scripts/check_openspec_tasks.py --changed
 python scripts/check_openspec_design.py --changed
 python scripts/check_openspec_retention.py --changed --require-local-ref
 ```
+
+## Local Evolution Cycle Runner
+
+Run a complete local evolution validation cycle and persist a report:
+
+```bash
+./scripts/run_evolution_cycle.sh
+```
+
+This executes:
+
+1. OpenSpec proposal/tasks/design/retention validators
+2. Deterministic eval suite (`pr` profile)
+3. Deterministic eval tests
+
+Reports are stored under:
+
+- `tmp/runs/evolution/<timestamp>.md`
+- `tmp/runs/evolution/index.md`
