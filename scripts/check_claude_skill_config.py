@@ -1,64 +1,33 @@
 #!/usr/bin/env python3
-"""Validate Claude Agent SDK skill auto-loading configuration."""
+"""Backward-compatible wrapper for runtime agent config validation.
+
+This script name is kept for compatibility with existing hooks/scripts,
+but validation now targets codex-bridge runtime requirements.
+"""
 
 from __future__ import annotations
 
-import re
+import subprocess
 import sys
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-AGENT_FILE = REPO_ROOT / "backend" / "agent.py"
-
-
-def require(pattern: str, text: str, message: str) -> list[str]:
-    if re.search(pattern, text, flags=re.MULTILINE | re.DOTALL):
-        return []
-    return [message]
 
 
 def main() -> int:
-    if not AGENT_FILE.exists():
-        print(f"[error] missing file: {AGENT_FILE}")
-        return 1
+    checks = [
+        ["python3", str(REPO_ROOT / "scripts" / "check_codex_bridge_config.py")],
+        ["python3", str(REPO_ROOT / "scripts" / "check_skill_runtime_access.py")],
+    ]
+    for cmd in checks:
+        result = subprocess.run(cmd, cwd=str(REPO_ROOT))
+        if result.returncode != 0:
+            return result.returncode
 
-    text = AGENT_FILE.read_text(encoding="utf-8")
-    errors: list[str] = []
-
-    errors += require(
-        r"setting_sources=\[\s*\"user\"\s*,\s*\"project\"\s*\]",
-        text,
-        'backend/agent.py must set setting_sources=["user", "project"] for SDK-native skills',
+    print(
+        "[ok] Legacy check alias passed using codex-bridge runtime validations."
     )
-    errors += require(
-        r"allowed_tools=\[[^\]]*\"Skill\"[^\]]*\]",
-        text,
-        'backend/agent.py allowed_tools must include "Skill"',
-    )
-    errors += require(
-        r"cwd=str\(self\.cwd\)",
-        text,
-        "backend/agent.py must set ClaudeAgentOptions cwd to project root (self.cwd)",
-    )
-    errors += require(
-        r"def _validate_claude_auth_preflight\(self\) -> Optional\[str\]:",
-        text,
-        "backend/agent.py must include deterministic Claude auth preflight",
-    )
-    errors += require(
-        r"def _build_claude_sdk_env\(self\) -> Dict\[str, str\]:",
-        text,
-        "backend/agent.py must build explicit Claude SDK env for auth propagation",
-    )
-
-    if errors:
-        print("[error] Claude skill config validation failed:")
-        for err in errors:
-            print(f"  - {err}")
-        return 1
-
-    print("[ok] Claude skill config is set for SDK-native automatic loading.")
     return 0
 
 

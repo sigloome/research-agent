@@ -46,7 +46,8 @@ run_step() {
   run_step "OpenSpec tasks validation" "python $ROOT_DIR/scripts/check_openspec_tasks.py"
   run_step "OpenSpec design validation" "python $ROOT_DIR/scripts/check_openspec_design.py"
   run_step "OpenSpec retention validation" "python $ROOT_DIR/scripts/check_openspec_retention.py"
-  run_step "Claude skill auto-load config validation" "python $ROOT_DIR/scripts/check_claude_skill_config.py"
+  run_step "Codex bridge config validation" "python $ROOT_DIR/scripts/check_codex_bridge_config.py"
+  run_step "Runtime skill accessibility validation" "python $ROOT_DIR/scripts/check_skill_runtime_access.py"
   run_step "Deterministic eval suite (PR profile)" "python -m evals.runners.run_suite --suite pr --judge-rate 0.15 --k 1"
   run_step "Deterministic eval tests" "pytest -q evals/tests/test_retrieval_prompt_paths.py -q"
 } || true
