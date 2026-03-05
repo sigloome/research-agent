@@ -4,10 +4,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 import httpx
-from claude_agent_sdk import ClaudeAgentOptions, SandboxSettings
-from claude_agent_sdk.types import AssistantMessage, TextBlock, ToolUseBlock
 from backend.logging_config import get_logger
-from backend.content_filter import StreamingContentFilter
 
 logger = get_logger()
 
@@ -98,7 +95,7 @@ def generate_tool_description(tool_name: str, tool_input: Dict[str, Any]) -> str
 
 class MainAgent:
     """
-    Main AI Agent using claude_agent_sdk.client.ClaudeSDKClient.
+    Main AI Agent using codex bridge (OpenAI-compatible Responses API).
     
     This is the single unified agent that handles all tasks including research.
     Uses built-in SDK tools (WebSearch, WebFetch, Read, Write, Bash) directly.
@@ -106,11 +103,7 @@ class MainAgent:
     
     def __init__(self):
         # Get API credentials from environment
-        self.provider = os.environ.get("AGENT_PROVIDER", "claude").strip().lower()
-        self.anthropic_api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
-        self.anthropic_auth_token = (os.environ.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
-        self.base_url = os.environ.get("ANTHROPIC_BASE_URL")
-        self.model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
+        self.provider = os.environ.get("AGENT_PROVIDER", "codex_bridge").strip().lower()
         self.codex_base_url = os.environ.get("OPENAI_BASE_URL", "").strip()
         self.codex_model = os.environ.get("OPENAI_MODEL", "gpt-5.3-codex")
         self.codex_auth_header_name = os.environ.get(
@@ -229,43 +222,23 @@ class MainAgent:
         """
         
         self.client = None
+        self.max_tool_turns = 6
 
-    def _validate_claude_auth_preflight(self) -> Optional[str]:
-        """
-        Deterministic preflight validation for Claude auth configuration.
-        Fails fast before issuing any model request so auth blockers are explicit.
-        """
-        api_key = self.anthropic_api_key
-        auth_token = self.anthropic_auth_token
-
-        if api_key and not api_key.startswith("sk-ant-"):
-            return (
-                "Invalid ANTHROPIC_API_KEY format. Expected an Anthropic API key "
-                "starting with 'sk-ant-'. If you are using OAuth, unset ANTHROPIC_API_KEY "
-                "and use ANTHROPIC_AUTH_TOKEN instead."
-            )
-        if not api_key and not auth_token:
-            return (
-                "Missing Claude authentication. Set ANTHROPIC_API_KEY (sk-ant-*) "
-                "or ANTHROPIC_AUTH_TOKEN before using provider=claude."
-            )
-        return None
-
-    def _build_claude_sdk_env(self) -> Dict[str, str]:
-        """
-        Build an explicit env payload for the Claude SDK subprocess.
-        Empty values intentionally mask inherited malformed credentials.
-        """
-        sdk_env: Dict[str, str] = {
-            "ANTHROPIC_BASE_URL": self.base_url or "",
-            "ANTHROPIC_API_KEY": "",
-            "ANTHROPIC_AUTH_TOKEN": "",
-        }
-        if self.anthropic_api_key.startswith("sk-ant-"):
-            sdk_env["ANTHROPIC_API_KEY"] = self.anthropic_api_key
-        if self.anthropic_auth_token:
-            sdk_env["ANTHROPIC_AUTH_TOKEN"] = self.anthropic_auth_token
-        return sdk_env
+    def _is_skill_routed_query(self, query: str) -> bool:
+        """Detect whether a query should prioritize local skill runtime."""
+        lower_query = (query or "").lower()
+        skill_routing_terms = [
+            "skill",
+            "paper",
+            "library",
+            "knowledge",
+            "rag",
+            "preference",
+            "profile",
+            "history",
+            "recommend",
+        ]
+        return any(term in lower_query for term in skill_routing_terms)
 
     def get_system_prompt(self, user_preferences: Optional[str] = None) -> str:
         """Build the system prompt with user preferences included."""
@@ -310,62 +283,14 @@ class MainAgent:
         return prompt
 
     async def initialize(self):
-        """Initialize and connect the SDK client."""
-        if self.provider == "codex_bridge":
-            logger.info(
-                "agent_provider_initialized",
-                provider="codex_bridge",
-                model=self.codex_model,
-                model_source="server_startup_env",
-                endpoint=self._codex_responses_url(),
-            )
-            return
-
-        if not self.client:
-            preflight_error = self._validate_claude_auth_preflight()
-            if preflight_error:
-                logger.error("claude_auth_preflight_failed", reason=preflight_error)
-                raise RuntimeError(preflight_error)
-
-            from claude_agent_sdk.client import ClaudeSDKClient
-            
-            sandbox_settings: SandboxSettings = {
-                "enabled": True,
-                "autoAllowBashIfSandboxed": True,
-                "network": {
-                    "allowLocalBinding": True
-                }
-            }
-
-            # Only forward ANTHROPIC_API_KEY if it looks like a real API key.
-            # If the env uses an OAuth-style token (e.g. "user.password"), omit
-            # the API key so the bundled CLI falls back to its stored OAuth
-            # credentials while still routing through ANTHROPIC_BASE_URL.
-            sdk_env = self._build_claude_sdk_env()
-
-            options = ClaudeAgentOptions(
-                cwd=str(self.cwd),
-                # Enable automatic SDK-native skill loading from both user and project scopes.
-                setting_sources=["user", "project"],
-                model=self.model,
-                env=sdk_env,
-                # Use composed prompt so profile/history wiring is active in runtime.
-                system_prompt=self.get_system_prompt(),
-                allowed_tools=["WebSearch", "WebFetch", "Task", "Read", "Write", "Bash", "Skill"],
-                permission_mode="bypassPermissions",
-                sandbox=sandbox_settings
-            )
-            
-            self.client = ClaudeSDKClient(options=options)
-            logger.info(
-                "agent_provider_initialized",
-                provider="claude_agent_sdk",
-                model=self.model,
-                model_source="server_startup_env",
-            )
-            print("Connecting to Claude SDK Client...")
-            await self.client.connect()
-            print("Claude SDK Client Connected.")
+        """Initialize provider runtime (bridge-only mode)."""
+        logger.info(
+            "agent_provider_initialized",
+            provider="codex_bridge",
+            model=self.codex_model,
+            model_source="server_startup_env",
+            endpoint=self._codex_responses_url(),
+        )
 
     async def chat_generator(
         self, 
@@ -419,18 +344,8 @@ class MainAgent:
                              This is used when resuming a historical chat session
                              that the SDK doesn't have in memory.
         """
-        if self.provider == "codex_bridge":
-            async for chunk in self._run_codex_bridge(
-                query=query,
-                user_preferences=user_preferences,
-                conversation_history=conversation_history,
-            ):
-                yield chunk
-            return
-
-        async for chunk in self._run_claude(
+        async for chunk in self._run_codex_bridge(
             query=query,
-            chat_id=chat_id,
             user_preferences=user_preferences,
             conversation_history=conversation_history,
         ):
@@ -451,21 +366,7 @@ class MainAgent:
         conversation_history: Optional[List[Dict[str, str]]],
     ) -> str:
         full_query = query
-        lower_query = (query or "").lower()
-
-        # Enforce local-skill-first routing for research-relevant asks.
-        skill_routing_terms = [
-            "skill",
-            "paper",
-            "library",
-            "knowledge",
-            "rag",
-            "preference",
-            "profile",
-            "history",
-            "recommend",
-        ]
-        if any(term in lower_query for term in skill_routing_terms):
+        if self._is_skill_routed_query(query):
             full_query = (
                 "[MANDATORY TOOL ROUTING]\n"
                 "1) Call Skill tool to enumerate available skills before final answer.\n"
@@ -488,107 +389,220 @@ class MainAgent:
             full_query += f"\n\n[User Context Preferences]\n{user_preferences}"
         return full_query
 
-    async def _run_claude(
-        self,
-        query: str,
-        chat_id: str,
-        user_preferences: Optional[str],
-        conversation_history: Optional[List[Dict[str, str]]],
-    ):
-        if not self.client:
-            await self.initialize()
+    def _build_bridge_tools(self) -> List[Dict[str, Any]]:
+        """Declare function tools for the bridge runtime."""
+        return [
+            {
+                "type": "function",
+                "name": "Skill",
+                "description": (
+                    "Invoke project skills. Use action=list to enumerate skills. "
+                    "Use skill=knowledge or skill=preference for local project context."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["list", "read", "run"],
+                            "description": "list skills, read a skill, or run a named skill",
+                        },
+                        "skill": {
+                            "type": "string",
+                            "description": "Skill name such as knowledge or preference",
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": "Query payload for the skill",
+                        },
+                        "args": {
+                            "type": "object",
+                            "description": "Optional structured arguments for skill execution",
+                        },
+                        "skill_path": {
+                            "type": "string",
+                            "description": "Path/name used by read action",
+                        },
+                    },
+                    "required": ["action"],
+                    "additionalProperties": True,
+                },
+            }
+        ]
 
-        full_query = self._build_full_query(query, user_preferences, conversation_history)
+    def _extract_tool_calls(self, response_obj: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract function calls from a completed response object."""
+        output = response_obj.get("output", [])
+        if not isinstance(output, list):
+            return []
 
-        # Send query to SDK
-        await self.client.query(full_query, session_id=chat_id)
+        calls: List[Dict[str, Any]] = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type not in ("function_call", "tool_call"):
+                continue
+            name = item.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            call_id = item.get("call_id") or item.get("id") or f"tool-{len(calls) + 1}"
+            raw_args = item.get("arguments", {})
+            args: Dict[str, Any] = {}
+            if isinstance(raw_args, str):
+                try:
+                    parsed = json.loads(raw_args)
+                    if isinstance(parsed, dict):
+                        args = parsed
+                except Exception:
+                    args = {"raw": raw_args}
+            elif isinstance(raw_args, dict):
+                args = raw_args
+            calls.append(
+                {
+                    "tool_call_id": str(call_id),
+                    "tool_name": name,
+                    "input": args,
+                }
+            )
+        return calls
 
-        content_filter = StreamingContentFilter()
-        text_part_id = "text-1"
-        tool_counter = 0
+    def _run_skill_tool(self, tool_input: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute the Skill tool via project runtime modules.
+        No manual SKILL.md content injection is used.
+        """
+        import importlib
 
-        try:
-            yield self._format_chunk({"type": "start"})
-            yield self._format_chunk({"type": "start-step"})
-            yield self._format_chunk({"type": "text-start", "id": text_part_id})
+        skill_mgmt = importlib.import_module("skills.skill-management.core")
+        action = str(tool_input.get("action", "run")).strip().lower()
+        skill_name = str(
+            tool_input.get("skill")
+            or tool_input.get("skill_name")
+            or tool_input.get("name")
+            or ""
+        ).strip()
 
-            async for msg in self.client.receive_response():
-                logger.error(f"DEBUG: Agent yielded message type: {type(msg).__name__}")
-                if isinstance(msg, AssistantMessage):
-                    logger.error(f"DEBUG: AssistantMessage blocks: {len(msg.content)}")
-                    for block in msg.content:
-                        if isinstance(block, TextBlock):
-                            logger.error(f"DEBUG: TextBlock content: {block.text[:50]}...")
-                            filtered_text = content_filter.filter_chunk(block.text)
-                            if filtered_text:
-                                yield self._format_chunk(
-                                    {
-                                        "type": "text-delta",
-                                        "id": text_part_id,
-                                        "delta": filtered_text,
-                                    }
-                                )
-                        if isinstance(block, ToolUseBlock):
-                            tool_name = block.name
-                            logger.error(f"DEBUG: ToolUseBlock: {tool_name}")
-                            tool_input = getattr(block, "input", {}) or {}
-                            description = generate_tool_description(tool_name, tool_input)
-                            tool_counter += 1
-                            tool_call_id = getattr(block, "id", None) or f"tool-{tool_counter}"
-                            yield self._format_chunk(
-                                {
-                                    "type": "tool-input-start",
-                                    "toolCallId": tool_call_id,
-                                    "toolName": tool_name,
-                                    "title": description,
-                                }
-                            )
-                            yield self._format_chunk(
-                                {
-                                    "type": "tool-input-available",
-                                    "toolCallId": tool_call_id,
-                                    "toolName": tool_name,
-                                    "input": tool_input,
-                                    "title": description,
-                                }
-                            )
-                            yield self._format_chunk(
-                                {
-                                    "type": "tool-output-available",
-                                    "toolCallId": tool_call_id,
-                                    "output": {"description": description},
-                                }
-                            )
+        if action == "list":
+            skills = skill_mgmt.list_skills()
+            return {"action": "list", "skills": skills}
 
-                elif type(msg).__name__ == "ResultMessage":
-                    remaining = content_filter.flush()
-                    if remaining:
-                        yield self._format_chunk(
-                            {
-                                "type": "text-delta",
-                                "id": text_part_id,
-                                "delta": remaining,
-                            }
-                        )
-                    cost_info = {"duration_ms": msg.duration_ms, "cost": msg.total_cost_usd}
-                    logger.error(f"DEBUG: ResultMessage: {cost_info}")
-                    yield self._format_chunk({"type": "text-end", "id": text_part_id})
-                    yield self._format_chunk({"type": "finish-step"})
-                    yield self._format_chunk({"type": "data-metrics", "data": cost_info})
-                    yield self._format_chunk(
-                        {
-                            "type": "finish",
-                            "finishReason": "stop",
-                            "messageMetadata": cost_info,
-                        }
-                    )
-                    print(f"Agent finished. Duration: {msg.duration_ms}ms, Cost: ${msg.total_cost_usd:.4f}")
-        except Exception as e:
-            logger.error(f"Agent execution error: {e}")
-            yield self._format_chunk({"type": "error", "errorText": str(e)})
-            yield self._format_chunk({"type": "text-end", "id": text_part_id})
-            yield self._format_chunk({"type": "finish-step"})
-            yield self._format_chunk({"type": "finish", "finishReason": "error"})
+        if action == "read":
+            target = str(tool_input.get("skill_path") or skill_name or "").strip()
+            if not target:
+                return {"error": "read action requires skill_path or skill"}
+            content = skill_mgmt.read_skill(target)
+            return {"action": "read", "target": target, "content": content}
+
+        args = tool_input.get("args")
+        if not isinstance(args, dict):
+            args = {}
+        query = str(
+            tool_input.get("query")
+            or args.get("query")
+            or args.get("prompt")
+            or args.get("topic")
+            or ""
+        ).strip()
+
+        if skill_name == "knowledge":
+            from skills.knowledge.db import manager
+
+            if query:
+                papers = manager.search_local_papers(query)
+            else:
+                papers = manager.list_papers(sort_by="created_at_desc")
+            compact = []
+            for row in (papers or [])[:8]:
+                if not isinstance(row, dict):
+                    continue
+                compact.append(
+                    {
+                        "id": row.get("id"),
+                        "title": row.get("title"),
+                        "summary": row.get("summary_main_ideas"),
+                        "url": row.get("url"),
+                    }
+                )
+            return {
+                "skill": "knowledge",
+                "query": query,
+                "result_count": len(compact),
+                "results": compact,
+            }
+
+        if skill_name == "preference":
+            from skills.knowledge.db import manager
+            from skills.preference.implementation import get_user_history, get_user_profile
+
+            summary = manager.get_preference_summary()
+            profile = get_user_profile()
+            history = get_user_history()
+            return {
+                "skill": "preference",
+                "summary": summary,
+                "profile": profile,
+                "history": history,
+            }
+
+        if skill_name:
+            return {
+                "error": f"Unsupported skill: {skill_name}",
+                "supported_skills": ["knowledge", "preference"],
+            }
+        return {"error": "run action requires skill name"}
+
+    def _synthesize_skill_results(
+        self, query: str, tool_runs: List[Dict[str, Any]]
+    ) -> str:
+        """Create a deterministic assistant summary from Skill tool outputs."""
+        lines: List[str] = []
+        lines.append("Here is what I found from project skills:")
+        lines.append("")
+
+        listed = False
+        for run in tool_runs:
+            if run.get("tool_name") != "Skill":
+                continue
+            input_obj = run.get("input", {})
+            output_obj = run.get("output", {})
+            if not isinstance(input_obj, dict) or not isinstance(output_obj, dict):
+                continue
+
+            action = str(input_obj.get("action", "")).strip().lower()
+            skill = str(input_obj.get("skill", "")).strip().lower()
+            if action == "list":
+                skills = output_obj.get("skills", [])
+                if isinstance(skills, list):
+                    names = []
+                    for item in skills:
+                        if isinstance(item, dict) and isinstance(item.get("name"), str):
+                            names.append(item["name"])
+                    if names:
+                        uniq = sorted(set(names))
+                        lines.append(f"- Available skills: {', '.join(uniq)}")
+                        listed = True
+            elif action == "run" and skill == "knowledge":
+                count = output_obj.get("result_count", 0)
+                lines.append(f"- Knowledge skill: found {count} local paper results.")
+                results = output_obj.get("results", [])
+                if isinstance(results, list):
+                    for item in results[:3]:
+                        if isinstance(item, dict):
+                            title = item.get("title") or item.get("id") or "Untitled"
+                            lines.append(f"  - {title}")
+            elif action == "run" and skill == "preference":
+                summary = output_obj.get("summary")
+                if isinstance(summary, str) and summary.strip():
+                    lines.append(f"- Preference skill summary: {summary.strip()}")
+                else:
+                    lines.append("- Preference skill summary: no preference summary available.")
+
+        if not listed:
+            lines.append("- Available skills were not returned in this run.")
+        lines.append("")
+        lines.append(f"Request handled: {query}")
+        return "\n".join(lines)
 
     async def _run_codex_bridge(
         self,
@@ -599,20 +613,15 @@ class MainAgent:
         full_query = self._build_full_query(query, user_preferences, conversation_history)
         text_part_id = "text-1"
         started = False
-        finished = False
         usage_info: Dict[str, Any] = {}
+        observed_skill_tool = False
+        skill_routed_query = self._is_skill_routed_query(query)
 
         headers: Dict[str, str] = {"Content-Type": "application/json"}
         if self.codex_auth_header_name and self.codex_auth_header_value:
             headers[self.codex_auth_header_name] = self.codex_auth_header_value
         elif os.getenv("OPENAI_API_KEY"):
             headers["Authorization"] = f"Bearer {os.getenv('OPENAI_API_KEY')}"
-
-        payload: Dict[str, Any] = {
-            "model": self.codex_model,
-            "input": full_query,
-            "stream": True,
-        }
 
         responses_url = self._codex_responses_url()
         if not responses_url:
@@ -646,90 +655,167 @@ class MainAgent:
                 self._format_chunk({"type": "text-start", "id": text_part_id}),
             ]
 
+        tool_outputs_for_next_turn: Any = full_query
+        bridge_tools = self._build_bridge_tools()
+
         async with httpx.AsyncClient(timeout=120.0) as client:
             try:
-                async with client.stream(
-                    "POST",
-                    responses_url,
-                    headers=headers,
-                    json=payload,
-                ) as response:
-                    if response.status_code >= 400:
-                        body = (await response.aread()).decode("utf-8", errors="replace")
-                        yield self._format_chunk(
-                            {
-                                "type": "error",
-                                "errorText": f"Codex bridge error {response.status_code}: {body[:300]}",
-                            }
-                        )
-                        yield self._format_chunk({"type": "finish", "finishReason": "error"})
-                        return
+                for _ in range(self.max_tool_turns):
+                    payload: Dict[str, Any] = {
+                        "model": self.codex_model,
+                        "input": tool_outputs_for_next_turn,
+                        "stream": True,
+                        "tools": bridge_tools,
+                    }
+                    if skill_routed_query:
+                        payload["tool_choice"] = "required"
+                    payload["instructions"] = self.get_system_prompt(user_preferences)
 
+                    completed_response: Optional[Dict[str, Any]] = None
                     current_event: Optional[str] = None
                     data_lines: List[str] = []
 
-                    async for raw_line in response.aiter_lines():
-                        line = raw_line.strip()
-                        if not line:
-                            if not data_lines:
-                                current_event = None
-                                continue
-                            data_blob = "\n".join(data_lines)
-                            data_lines = []
-                            if not data_blob:
-                                current_event = None
-                                continue
-                            try:
-                                event_payload = json.loads(data_blob)
-                            except Exception:
+                    async with client.stream(
+                        "POST",
+                        responses_url,
+                        headers=headers,
+                        json=payload,
+                    ) as response:
+                        if response.status_code >= 400:
+                            body = (await response.aread()).decode("utf-8", errors="replace")
+                            yield self._format_chunk(
+                                {
+                                    "type": "error",
+                                    "errorText": f"Codex bridge error {response.status_code}: {body[:300]}",
+                                }
+                            )
+                            yield self._format_chunk({"type": "finish", "finishReason": "error"})
+                            return
+
+                        async for raw_line in response.aiter_lines():
+                            line = raw_line.strip()
+                            if not line:
+                                if not data_lines:
+                                    current_event = None
+                                    continue
+                                data_blob = "\n".join(data_lines)
+                                data_lines = []
+                                if not data_blob:
+                                    current_event = None
+                                    continue
+                                try:
+                                    event_payload = json.loads(data_blob)
+                                except Exception:
+                                    current_event = None
+                                    continue
+
+                                event_type = current_event or event_payload.get("type")
+                                if event_type == "response.created":
+                                    for chunk in emit_start():
+                                        yield chunk
+                                elif event_type == "response.output_text.delta":
+                                    for chunk in emit_start():
+                                        yield chunk
+                                    delta = event_payload.get("delta", "")
+                                    if isinstance(delta, str) and delta:
+                                        yield self._format_chunk(
+                                            {
+                                                "type": "text-delta",
+                                                "id": text_part_id,
+                                                "delta": delta,
+                                            }
+                                        )
+                                elif event_type == "response.completed":
+                                    response_obj = event_payload.get("response", {})
+                                    if isinstance(response_obj, dict):
+                                        completed_response = response_obj
+                                        usage = response_obj.get("usage")
+                                        if isinstance(usage, dict):
+                                            usage_info = usage
                                 current_event = None
                                 continue
 
-                            event_type = current_event or event_payload.get("type")
-                            if event_type == "response.created":
-                                for chunk in emit_start():
-                                    yield chunk
-                            elif event_type == "response.output_text.delta":
-                                for chunk in emit_start():
-                                    yield chunk
-                                delta = event_payload.get("delta", "")
-                                if isinstance(delta, str) and delta:
-                                    yield self._format_chunk(
-                                        {
-                                            "type": "text-delta",
-                                            "id": text_part_id,
-                                            "delta": delta,
-                                        }
-                                    )
-                            elif event_type == "response.completed":
-                                response_obj = event_payload.get("response", {})
-                                if isinstance(response_obj, dict):
-                                    usage = response_obj.get("usage")
-                                    if isinstance(usage, dict):
-                                        usage_info = usage
-                                for chunk in emit_start():
-                                    yield chunk
-                                yield self._format_chunk({"type": "text-end", "id": text_part_id})
-                                yield self._format_chunk({"type": "finish-step"})
-                                if usage_info:
-                                    yield self._format_chunk(
-                                        {"type": "data-metrics", "data": usage_info}
-                                    )
-                                yield self._format_chunk(
-                                    {
-                                        "type": "finish",
-                                        "finishReason": "stop",
-                                        "messageMetadata": usage_info or {},
-                                    }
-                                )
-                                finished = True
-                            current_event = None
-                            continue
+                            if line.startswith("event:"):
+                                current_event = line[6:].strip()
+                            elif line.startswith("data:"):
+                                data_lines.append(line[5:].strip())
 
-                        if line.startswith("event:"):
-                            current_event = line[6:].strip()
-                        elif line.startswith("data:"):
-                            data_lines.append(line[5:].strip())
+                    if not completed_response:
+                        break
+
+                    tool_calls = self._extract_tool_calls(completed_response)
+                    if not tool_calls:
+                        break
+
+                    next_inputs: List[Dict[str, Any]] = []
+                    tool_runs: List[Dict[str, Any]] = []
+                    for call in tool_calls:
+                        tool_name = call["tool_name"]
+                        call_id = call["tool_call_id"]
+                        tool_input = call["input"]
+
+                        if tool_name == "Skill":
+                            observed_skill_tool = True
+                        yield self._format_chunk(
+                            {
+                                "type": "tool-input-start",
+                                "toolCallId": call_id,
+                                "toolName": tool_name,
+                            }
+                        )
+                        yield self._format_chunk(
+                            {
+                                "type": "tool-input-available",
+                                "toolCallId": call_id,
+                                "toolName": tool_name,
+                                "input": tool_input,
+                            }
+                        )
+
+                        try:
+                            if tool_name == "Skill":
+                                tool_output_obj = self._run_skill_tool(tool_input)
+                            else:
+                                tool_output_obj = {"error": f"Unsupported tool: {tool_name}"}
+                        except Exception as tool_error:
+                            tool_output_obj = {"error": f"Tool execution failed: {tool_error}"}
+
+                        yield self._format_chunk(
+                            {
+                                "type": "tool-output-available",
+                                "toolCallId": call_id,
+                                "output": tool_output_obj,
+                            }
+                        )
+                        tool_runs.append(
+                            {
+                                "tool_name": tool_name,
+                                "input": tool_input,
+                                "output": tool_output_obj,
+                            }
+                        )
+                        next_inputs.append(
+                            {
+                                "type": "function_call_output",
+                                "call_id": call_id,
+                                "output": json.dumps(tool_output_obj, ensure_ascii=False),
+                            }
+                        )
+
+                    if tool_runs:
+                        local_text = self._synthesize_skill_results(query, tool_runs)
+                        if local_text:
+                            for chunk in emit_start():
+                                yield chunk
+                            yield self._format_chunk(
+                                {
+                                    "type": "text-delta",
+                                    "id": text_part_id,
+                                    "delta": local_text,
+                                }
+                            )
+                            break
+                    tool_outputs_for_next_turn = next_inputs
 
             except Exception as e:
                 logger.error(f"Codex bridge execution error: {e}")
@@ -741,15 +827,39 @@ class MainAgent:
                 yield self._format_chunk({"type": "finish", "finishReason": "error"})
                 return
 
-        if not finished:
+        if skill_routed_query and not observed_skill_tool:
             for chunk in emit_start():
                 yield chunk
+            yield self._format_chunk(
+                {
+                    "type": "error",
+                    "errorText": (
+                        "Skill-routed request completed without Skill tool invocation; "
+                        "bridge tool-routing requirement not satisfied."
+                    ),
+                }
+            )
             yield self._format_chunk({"type": "text-end", "id": text_part_id})
             yield self._format_chunk({"type": "finish-step"})
             yield self._format_chunk(
                 {
                     "type": "finish",
-                    "finishReason": "stop",
+                    "finishReason": "error",
                     "messageMetadata": usage_info or {},
                 }
             )
+            return
+
+        for chunk in emit_start():
+            yield chunk
+        yield self._format_chunk({"type": "text-end", "id": text_part_id})
+        yield self._format_chunk({"type": "finish-step"})
+        if usage_info:
+            yield self._format_chunk({"type": "data-metrics", "data": usage_info})
+        yield self._format_chunk(
+            {
+                "type": "finish",
+                "finishReason": "stop",
+                "messageMetadata": usage_info or {},
+            }
+        )
