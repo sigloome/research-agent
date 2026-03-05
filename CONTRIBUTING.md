@@ -59,3 +59,46 @@ We enforce strict linting. Run this before every commit:
 2. Update Types (SDD).
 3. Implement Logic.
 4. Verify with `./scripts/lint.sh`.
+
+## OpenSpec Proposal Requirements
+
+For any change under `openspec/changes/<change-id>/proposal.md`, include these required sections:
+
+1. `## Why`
+2. `## What Changes`
+3. `## Expected Benefit`
+4. `## Success Metrics`
+5. `## Risk Metrics`
+6. `## Kill Criteria`
+
+Use `openspec/changes/_templates/proposal.md` as the baseline template.
+
+Validation command:
+
+```bash
+python scripts/check_openspec_proposals.py
+```
+
+For any change under `openspec/changes/<change-id>/tasks.md`, include:
+
+1. `## BDD Evidence` with Given/When/Then wording
+2. `## TDD Evidence` with failing-test -> implemented -> passing trace
+
+Validation command:
+
+```bash
+python scripts/check_openspec_tasks.py
+```
+
+Enable local commit-time enforcement once per clone:
+
+```bash
+./scripts/setup-git-hooks.sh
+```
+
+This installs a local `pre-commit` hook that runs:
+
+```bash
+python scripts/check_openspec_proposals.py --changed
+python scripts/check_openspec_tasks.py --changed
+```
