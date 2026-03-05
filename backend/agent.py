@@ -107,7 +107,8 @@ class MainAgent:
     def __init__(self):
         # Get API credentials from environment
         self.provider = os.environ.get("AGENT_PROVIDER", "claude").strip().lower()
-        self.api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+        self.anthropic_api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+        self.anthropic_auth_token = (os.environ.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
         self.base_url = os.environ.get("ANTHROPIC_BASE_URL")
         self.model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
         self.codex_base_url = os.environ.get("OPENAI_BASE_URL", "").strip()
@@ -229,6 +230,43 @@ class MainAgent:
         
         self.client = None
 
+    def _validate_claude_auth_preflight(self) -> Optional[str]:
+        """
+        Deterministic preflight validation for Claude auth configuration.
+        Fails fast before issuing any model request so auth blockers are explicit.
+        """
+        api_key = self.anthropic_api_key
+        auth_token = self.anthropic_auth_token
+
+        if api_key and not api_key.startswith("sk-ant-"):
+            return (
+                "Invalid ANTHROPIC_API_KEY format. Expected an Anthropic API key "
+                "starting with 'sk-ant-'. If you are using OAuth, unset ANTHROPIC_API_KEY "
+                "and use ANTHROPIC_AUTH_TOKEN instead."
+            )
+        if not api_key and not auth_token:
+            return (
+                "Missing Claude authentication. Set ANTHROPIC_API_KEY (sk-ant-*) "
+                "or ANTHROPIC_AUTH_TOKEN before using provider=claude."
+            )
+        return None
+
+    def _build_claude_sdk_env(self) -> Dict[str, str]:
+        """
+        Build an explicit env payload for the Claude SDK subprocess.
+        Empty values intentionally mask inherited malformed credentials.
+        """
+        sdk_env: Dict[str, str] = {
+            "ANTHROPIC_BASE_URL": self.base_url or "",
+            "ANTHROPIC_API_KEY": "",
+            "ANTHROPIC_AUTH_TOKEN": "",
+        }
+        if self.anthropic_api_key.startswith("sk-ant-"):
+            sdk_env["ANTHROPIC_API_KEY"] = self.anthropic_api_key
+        if self.anthropic_auth_token:
+            sdk_env["ANTHROPIC_AUTH_TOKEN"] = self.anthropic_auth_token
+        return sdk_env
+
     def get_system_prompt(self, user_preferences: Optional[str] = None) -> str:
         """Build the system prompt with user preferences included."""
         prompt = self.base_system_prompt
@@ -284,6 +322,11 @@ class MainAgent:
             return
 
         if not self.client:
+            preflight_error = self._validate_claude_auth_preflight()
+            if preflight_error:
+                logger.error("claude_auth_preflight_failed", reason=preflight_error)
+                raise RuntimeError(preflight_error)
+
             from claude_agent_sdk.client import ClaudeSDKClient
             
             sandbox_settings: SandboxSettings = {
@@ -298,12 +341,7 @@ class MainAgent:
             # If the env uses an OAuth-style token (e.g. "user.password"), omit
             # the API key so the bundled CLI falls back to its stored OAuth
             # credentials while still routing through ANTHROPIC_BASE_URL.
-            api_key_val = self.api_key or os.getenv("ANTHROPIC_API_KEY", "")
-            sdk_env: Dict[str, str] = {
-                "ANTHROPIC_BASE_URL": self.base_url or "",
-            }
-            if api_key_val.startswith("sk-ant-"):
-                sdk_env["ANTHROPIC_API_KEY"] = api_key_val
+            sdk_env = self._build_claude_sdk_env()
 
             options = ClaudeAgentOptions(
                 cwd=str(self.cwd),

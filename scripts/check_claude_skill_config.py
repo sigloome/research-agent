@@ -41,6 +41,16 @@ def main() -> int:
         text,
         "backend/agent.py must set ClaudeAgentOptions cwd to project root (self.cwd)",
     )
+    errors += require(
+        r"def _validate_claude_auth_preflight\(self\) -> Optional\[str\]:",
+        text,
+        "backend/agent.py must include deterministic Claude auth preflight",
+    )
+    errors += require(
+        r"def _build_claude_sdk_env\(self\) -> Dict\[str, str\]:",
+        text,
+        "backend/agent.py must build explicit Claude SDK env for auth propagation",
+    )
 
     if errors:
         print("[error] Claude skill config validation failed:")
