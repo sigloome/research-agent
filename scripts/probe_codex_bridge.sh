@@ -33,6 +33,8 @@ fi
 
 tool_events=$(rg -n '"type": "tool-input-start"|"type": "tool-input-available"' "$STREAM_FILE" || true)
 skill_events=$(rg -n '"toolName": "Skill"|"toolName":"Skill"' "$STREAM_FILE" || true)
+knowledge_skill=$(rg -n '"skill": "knowledge"|"skill":"knowledge"' "$STREAM_FILE" || true)
+preference_skill=$(rg -n '"skill": "preference"|"skill":"preference"' "$STREAM_FILE" || true)
 if [[ -z "$tool_events" ]]; then
   echo "[fail] no tool-input events emitted"
   sed -n '1,220p' "$STREAM_FILE"
@@ -43,6 +45,16 @@ if [[ -z "$skill_events" ]]; then
   sed -n '1,260p' "$STREAM_FILE"
   exit 1
 fi
+if [[ -z "$knowledge_skill" ]]; then
+  echo "[fail] Skill invocation did not include knowledge"
+  sed -n '1,280p' "$STREAM_FILE"
+  exit 1
+fi
+if [[ -z "$preference_skill" ]]; then
+  echo "[fail] Skill invocation did not include preference"
+  sed -n '1,280p' "$STREAM_FILE"
+  exit 1
+fi
 
-echo "[ok] live probe observed Skill tool events"
-rg -n '"type": "tool-input-start"|"toolName": "Skill"|"finishReason"|\[DONE\]' "$STREAM_FILE" || true
+echo "[ok] live probe observed Skill tool events with knowledge+preference"
+rg -n '"type": "tool-input-start"|"toolName": "Skill"|"skill": "knowledge"|"skill": "preference"|"finishReason"|\[DONE\]' "$STREAM_FILE" || true
