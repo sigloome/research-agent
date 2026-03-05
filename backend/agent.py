@@ -2,8 +2,10 @@ import json
 import os
 from pathlib import Path
 from typing import AsyncGenerator, Optional, Dict, Any, List
+from urllib.parse import urljoin
 
-from claude_agent_sdk import ClaudeAgentOptions, query, SandboxSettings
+import httpx
+from claude_agent_sdk import ClaudeAgentOptions, SandboxSettings
 from claude_agent_sdk.types import AssistantMessage, TextBlock, ToolUseBlock
 from backend.logging_config import get_logger
 from backend.content_filter import StreamingContentFilter
@@ -107,9 +109,16 @@ class MainAgent:
     
     def __init__(self):
         # Get API credentials from environment
+        self.provider = os.environ.get("AGENT_PROVIDER", "claude").strip().lower()
         self.api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
         self.base_url = os.environ.get("ANTHROPIC_BASE_URL")
         self.model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
+        self.codex_base_url = os.environ.get("OPENAI_BASE_URL", "").strip()
+        self.codex_model = os.environ.get("OPENAI_MODEL", "gpt-5.3-codex")
+        self.codex_auth_header_name = os.environ.get(
+            "OPENAI_AUTH_HEADER_NAME", "Byted-Authorization"
+        )
+        self.codex_auth_header_value = os.environ.get("OPENAI_AUTH_HEADER_VALUE", "")
         # Project root is parent of backend/
         self.cwd = Path(__file__).parent.parent
         
@@ -250,6 +259,16 @@ class MainAgent:
 
     async def initialize(self):
         """Initialize and connect the SDK client."""
+        if self.provider == "codex_bridge":
+            logger.info(
+                "agent_provider_initialized",
+                provider="codex_bridge",
+                model=self.codex_model,
+                model_source="server_startup_env",
+                endpoint=self._codex_responses_url(),
+            )
+            return
+
         if not self.client:
             from claude_agent_sdk.client import ClaudeSDKClient
             
@@ -261,24 +280,36 @@ class MainAgent:
                 }
             }
 
+            # Only forward ANTHROPIC_API_KEY if it looks like a real API key.
+            # If the env uses an OAuth-style token (e.g. "user.password"), omit
+            # the API key so the bundled CLI falls back to its stored OAuth
+            # credentials while still routing through ANTHROPIC_BASE_URL.
+            api_key_val = self.api_key or os.getenv("ANTHROPIC_API_KEY", "")
+            sdk_env: Dict[str, str] = {
+                "ANTHROPIC_BASE_URL": self.base_url or "",
+            }
+            if api_key_val.startswith("sk-ant-"):
+                sdk_env["ANTHROPIC_API_KEY"] = api_key_val
+
             options = ClaudeAgentOptions(
                 cwd=str(self.cwd),
                 setting_sources=["project"],
                 model=self.model,
-                env=(
-                    {
-                        "ANTHROPIC_API_KEY": self.api_key or os.getenv("ANTHROPIC_API_KEY", ""),
-                        "ANTHROPIC_AUTH_TOKEN": os.getenv("ANTHROPIC_AUTH_TOKEN", ""),
-                        "ANTHROPIC_BASE_URL": self.base_url or "",
-                    }
-                ),
-                system_prompt=self.base_system_prompt,
+                env=sdk_env,
+                # Use composed prompt so profile/history wiring is active in runtime.
+                system_prompt=self.get_system_prompt(),
                 allowed_tools=["WebSearch", "WebFetch", "Task", "Read", "Write", "Bash", "Skill"],
                 permission_mode="bypassPermissions",
                 sandbox=sandbox_settings
             )
             
             self.client = ClaudeSDKClient(options=options)
+            logger.info(
+                "agent_provider_initialized",
+                provider="claude_agent_sdk",
+                model=self.model,
+                model_source="server_startup_env",
+            )
             print("Connecting to Claude SDK Client...")
             await self.client.connect()
             print("Claude SDK Client Connected.")
@@ -298,9 +329,8 @@ class MainAgent:
         user_preferences: Optional string summarizing user preferences
         conversation_history: Optional list of prior messages [{"role": "user"/"assistant", "content": "..."}]
         
-        OUTPUT FORMAT: Vercel AI SDK Data Stream Protocol
-        0:"<text>"\n  -> Text parts
-        d:<json>\n    -> Data parts (Tool usage)
+        OUTPUT FORMAT: SSE UI message chunks:
+        data: {"type":"start"|...}\n\n
         """
         try:
             logger.error(f"DEBUG: chat_generator started for query: {query[:20]} session: {session_id}")
@@ -310,22 +340,17 @@ class MainAgent:
                 user_preferences=user_preferences,
                 conversation_history=conversation_history
             ):
-                # self.run yields strings from _format_text or _format_data
+                # self.run yields SSE-formatted data events.
                 logger.error(f"DEBUG: chat_generator yielding chunk: {msg[:50]}...")
                 yield msg
         except Exception as e:
             logger.error(f"Chat generator error: {e}")
-            yield self._format_data({"type": "error", "content": str(e)})
+            yield self._format_chunk({"type": "error", "errorText": str(e)})
+            yield self._format_chunk({"type": "finish", "finishReason": "error"})
 
-    def _format_text(self, text: str) -> str:
-        """encodes text for Vercel protocol: 0:"quoted string"\n"""
-        return f'0:{json.dumps(text)}\n'
-
-    def _format_data(self, data: Dict[str, Any]) -> str:
-        """encodes data for Vercel protocol: d:{...}\n"""
-        # Note: standard Vercel 'd:' takes JSON directly, but frontend parsing might vary.
-        # Historically this codebase uses d:{"type":...}\n
-        return f'd:{json.dumps(data)}\n'
+    def _format_chunk(self, chunk: Dict[str, Any]) -> str:
+        """Encode a UI message chunk as SSE data event."""
+        return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
     async def run(
         self, 
@@ -341,67 +366,314 @@ class MainAgent:
                              This is used when resuming a historical chat session
                              that the SDK doesn't have in memory.
         """
-        if not self.client:
-            await self.initialize()
+        if self.provider == "codex_bridge":
+            async for chunk in self._run_codex_bridge(
+                query=query,
+                user_preferences=user_preferences,
+                conversation_history=conversation_history,
+            ):
+                yield chunk
+            return
 
-        # Build the full query with context
+        async for chunk in self._run_claude(
+            query=query,
+            chat_id=chat_id,
+            user_preferences=user_preferences,
+            conversation_history=conversation_history,
+        ):
+            yield chunk
+
+    def _codex_responses_url(self) -> str:
+        base = (self.codex_base_url or "").rstrip("/")
+        if not base:
+            return ""
+        if base.endswith("/responses"):
+            return base
+        return f"{base}/responses"
+
+    def _build_full_query(
+        self,
+        query: str,
+        user_preferences: Optional[str],
+        conversation_history: Optional[List[Dict[str, str]]],
+    ) -> str:
         full_query = query
-        
-        # If we have conversation history, prepend it as context
-        # This allows the agent to continue historical conversations properly
         if conversation_history and len(conversation_history) > 0:
             history_context = "\n\n[Prior Conversation History - Please continue this conversation]\n"
             for msg in conversation_history:
                 role_label = "User" if msg.get("role") == "user" else "Assistant"
                 content = msg.get("content", "")
-                # Truncate very long messages to keep context manageable
                 if len(content) > 2000:
                     content = content[:2000] + "... [truncated]"
                 history_context += f"\n{role_label}: {content}\n"
             history_context += "\n[End of History - Now responding to new message]\n\n"
             full_query = history_context + f"User: {query}"
-        
-        # Augment prompt with preferences if provided
         if user_preferences:
             full_query += f"\n\n[User Context Preferences]\n{user_preferences}"
+        return full_query
+
+    async def _run_claude(
+        self,
+        query: str,
+        chat_id: str,
+        user_preferences: Optional[str],
+        conversation_history: Optional[List[Dict[str, str]]],
+    ):
+        if not self.client:
+            await self.initialize()
+
+        full_query = self._build_full_query(query, user_preferences, conversation_history)
 
         # Send query to SDK
         await self.client.query(full_query, session_id=chat_id)
 
-        # Create content filter to remove <thinking> blocks and file paths
         content_filter = StreamingContentFilter()
+        text_part_id = "text-1"
+        tool_counter = 0
 
         try:
-            # Stream response until ResultMessage (end of turn)
+            yield self._format_chunk({"type": "start"})
+            yield self._format_chunk({"type": "start-step"})
+            yield self._format_chunk({"type": "text-start", "id": text_part_id})
+
             async for msg in self.client.receive_response():
-                # Handle different message types
                 logger.error(f"DEBUG: Agent yielded message type: {type(msg).__name__}")
                 if isinstance(msg, AssistantMessage):
                     logger.error(f"DEBUG: AssistantMessage blocks: {len(msg.content)}")
                     for block in msg.content:
                         if isinstance(block, TextBlock):
                             logger.error(f"DEBUG: TextBlock content: {block.text[:50]}...")
-                            # Filter out <thinking> blocks and file paths
                             filtered_text = content_filter.filter_chunk(block.text)
                             if filtered_text:
-                                yield self._format_text(filtered_text)
+                                yield self._format_chunk(
+                                    {
+                                        "type": "text-delta",
+                                        "id": text_part_id,
+                                        "delta": filtered_text,
+                                    }
+                                )
                         if isinstance(block, ToolUseBlock):
                             tool_name = block.name
                             logger.error(f"DEBUG: ToolUseBlock: {tool_name}")
-                            tool_input = getattr(block, 'input', {}) or {}
+                            tool_input = getattr(block, "input", {}) or {}
                             description = generate_tool_description(tool_name, tool_input)
-                            yield self._format_data({"type": "tool_usage", "tool": tool_name, "description": description})
-                            
+                            tool_counter += 1
+                            tool_call_id = getattr(block, "id", None) or f"tool-{tool_counter}"
+                            yield self._format_chunk(
+                                {
+                                    "type": "tool-input-start",
+                                    "toolCallId": tool_call_id,
+                                    "toolName": tool_name,
+                                    "title": description,
+                                }
+                            )
+                            yield self._format_chunk(
+                                {
+                                    "type": "tool-input-available",
+                                    "toolCallId": tool_call_id,
+                                    "toolName": tool_name,
+                                    "input": tool_input,
+                                    "title": description,
+                                }
+                            )
+                            yield self._format_chunk(
+                                {
+                                    "type": "tool-output-available",
+                                    "toolCallId": tool_call_id,
+                                    "output": {"description": description},
+                                }
+                            )
+
                 elif type(msg).__name__ == "ResultMessage":
-                    # Flush any remaining buffered content
                     remaining = content_filter.flush()
                     if remaining:
-                        yield self._format_text(remaining)
-                    # Final result - already yielded via AssistantMessage
+                        yield self._format_chunk(
+                            {
+                                "type": "text-delta",
+                                "id": text_part_id,
+                                "delta": remaining,
+                            }
+                        )
                     cost_info = {"duration_ms": msg.duration_ms, "cost": msg.total_cost_usd}
                     logger.error(f"DEBUG: ResultMessage: {cost_info}")
-                    yield self._format_data({"type": "meta", "info": cost_info})
+                    yield self._format_chunk({"type": "text-end", "id": text_part_id})
+                    yield self._format_chunk({"type": "finish-step"})
+                    yield self._format_chunk({"type": "data-metrics", "data": cost_info})
+                    yield self._format_chunk(
+                        {
+                            "type": "finish",
+                            "finishReason": "stop",
+                            "messageMetadata": cost_info,
+                        }
+                    )
                     print(f"Agent finished. Duration: {msg.duration_ms}ms, Cost: ${msg.total_cost_usd:.4f}")
         except Exception as e:
             logger.error(f"Agent execution error: {e}")
-            yield self._format_text(f"Error: {str(e)}")
+            yield self._format_chunk({"type": "error", "errorText": str(e)})
+            yield self._format_chunk({"type": "text-end", "id": text_part_id})
+            yield self._format_chunk({"type": "finish-step"})
+            yield self._format_chunk({"type": "finish", "finishReason": "error"})
+
+    async def _run_codex_bridge(
+        self,
+        query: str,
+        user_preferences: Optional[str],
+        conversation_history: Optional[List[Dict[str, str]]],
+    ):
+        full_query = self._build_full_query(query, user_preferences, conversation_history)
+        text_part_id = "text-1"
+        started = False
+        finished = False
+        usage_info: Dict[str, Any] = {}
+
+        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        if self.codex_auth_header_name and self.codex_auth_header_value:
+            headers[self.codex_auth_header_name] = self.codex_auth_header_value
+        elif os.getenv("OPENAI_API_KEY"):
+            headers["Authorization"] = f"Bearer {os.getenv('OPENAI_API_KEY')}"
+
+        payload: Dict[str, Any] = {
+            "model": self.codex_model,
+            "input": full_query,
+            "stream": True,
+        }
+
+        responses_url = self._codex_responses_url()
+        if not responses_url:
+            yield self._format_chunk(
+                {
+                    "type": "error",
+                    "errorText": "Missing OPENAI_BASE_URL for codex_bridge provider",
+                }
+            )
+            yield self._format_chunk({"type": "finish", "finishReason": "error"})
+            return
+
+        if not any(k.lower() in ("authorization", "byted-authorization") for k in headers):
+            yield self._format_chunk(
+                {
+                    "type": "error",
+                    "errorText": "Missing bridge authentication: set OPENAI_AUTH_HEADER_* or OPENAI_API_KEY",
+                }
+            )
+            yield self._format_chunk({"type": "finish", "finishReason": "error"})
+            return
+
+        def emit_start():
+            nonlocal started
+            if started:
+                return []
+            started = True
+            return [
+                self._format_chunk({"type": "start"}),
+                self._format_chunk({"type": "start-step"}),
+                self._format_chunk({"type": "text-start", "id": text_part_id}),
+            ]
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            try:
+                async with client.stream(
+                    "POST",
+                    responses_url,
+                    headers=headers,
+                    json=payload,
+                ) as response:
+                    if response.status_code >= 400:
+                        body = (await response.aread()).decode("utf-8", errors="replace")
+                        yield self._format_chunk(
+                            {
+                                "type": "error",
+                                "errorText": f"Codex bridge error {response.status_code}: {body[:300]}",
+                            }
+                        )
+                        yield self._format_chunk({"type": "finish", "finishReason": "error"})
+                        return
+
+                    current_event: Optional[str] = None
+                    data_lines: List[str] = []
+
+                    async for raw_line in response.aiter_lines():
+                        line = raw_line.strip()
+                        if not line:
+                            if not data_lines:
+                                current_event = None
+                                continue
+                            data_blob = "\n".join(data_lines)
+                            data_lines = []
+                            if not data_blob:
+                                current_event = None
+                                continue
+                            try:
+                                event_payload = json.loads(data_blob)
+                            except Exception:
+                                current_event = None
+                                continue
+
+                            event_type = current_event or event_payload.get("type")
+                            if event_type == "response.created":
+                                for chunk in emit_start():
+                                    yield chunk
+                            elif event_type == "response.output_text.delta":
+                                for chunk in emit_start():
+                                    yield chunk
+                                delta = event_payload.get("delta", "")
+                                if isinstance(delta, str) and delta:
+                                    yield self._format_chunk(
+                                        {
+                                            "type": "text-delta",
+                                            "id": text_part_id,
+                                            "delta": delta,
+                                        }
+                                    )
+                            elif event_type == "response.completed":
+                                response_obj = event_payload.get("response", {})
+                                if isinstance(response_obj, dict):
+                                    usage = response_obj.get("usage")
+                                    if isinstance(usage, dict):
+                                        usage_info = usage
+                                for chunk in emit_start():
+                                    yield chunk
+                                yield self._format_chunk({"type": "text-end", "id": text_part_id})
+                                yield self._format_chunk({"type": "finish-step"})
+                                if usage_info:
+                                    yield self._format_chunk(
+                                        {"type": "data-metrics", "data": usage_info}
+                                    )
+                                yield self._format_chunk(
+                                    {
+                                        "type": "finish",
+                                        "finishReason": "stop",
+                                        "messageMetadata": usage_info or {},
+                                    }
+                                )
+                                finished = True
+                            current_event = None
+                            continue
+
+                        if line.startswith("event:"):
+                            current_event = line[6:].strip()
+                        elif line.startswith("data:"):
+                            data_lines.append(line[5:].strip())
+
+            except Exception as e:
+                logger.error(f"Codex bridge execution error: {e}")
+                for chunk in emit_start():
+                    yield chunk
+                yield self._format_chunk({"type": "error", "errorText": str(e)})
+                yield self._format_chunk({"type": "text-end", "id": text_part_id})
+                yield self._format_chunk({"type": "finish-step"})
+                yield self._format_chunk({"type": "finish", "finishReason": "error"})
+                return
+
+        if not finished:
+            for chunk in emit_start():
+                yield chunk
+            yield self._format_chunk({"type": "text-end", "id": text_part_id})
+            yield self._format_chunk({"type": "finish-step"})
+            yield self._format_chunk(
+                {
+                    "type": "finish",
+                    "finishReason": "stop",
+                    "messageMetadata": usage_info or {},
+                }
+            )
