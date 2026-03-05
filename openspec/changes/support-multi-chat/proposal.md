@@ -44,3 +44,7 @@ Users currently have a single ephemeral chat session. To support complex workflo
 
 ### Modified Capabilities
 - `chat-interface`: Updating the UI to support the sidebar, session switching, and loading persisted history instead of maintaining local state only.
+
+## Local Run Logs
+
+- Retention index: tmp/runs/evolution/index.md

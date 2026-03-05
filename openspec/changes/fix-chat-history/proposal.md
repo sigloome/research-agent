@@ -44,3 +44,7 @@ Chat history fails to display when switching between chats because assistant mes
 - **Code**: `backend/app.py` - add missing import statement
 - **Behavior**: Chat sessions will now properly persist both user and assistant messages, enabling chat history to be displayed when switching between conversations
 - **Data**: New chats created after the fix will have proper history; existing chats remain unaffected (their messages were never saved)
+
+## Local Run Logs
+
+- Retention index: tmp/runs/evolution/index.md

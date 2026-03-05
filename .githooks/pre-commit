@@ -10,4 +10,7 @@ python scripts/check_openspec_tasks.py --changed
 echo "Running local OpenSpec design checks..."
 python scripts/check_openspec_design.py --changed
 
+echo "Running local OpenSpec retention checks..."
+python scripts/check_openspec_retention.py --changed --require-local-ref
+
 echo "pre-commit checks passed."

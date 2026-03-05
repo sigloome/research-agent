@@ -14,6 +14,9 @@ python scripts/check_openspec_tasks.py
 echo "🔍 Validating OpenSpec design ownership/risk/metrics..."
 python scripts/check_openspec_design.py
 
+echo "🔍 Validating OpenSpec artifact retention..."
+python scripts/check_openspec_retention.py
+
 echo "🔍 Linting Frontend (ESLint)..."
 cd frontend
 npm run lint

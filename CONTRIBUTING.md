@@ -103,6 +103,19 @@ Validation command:
 python scripts/check_openspec_design.py
 ```
 
+Retention requirement for each active `openspec/changes/<change-id>/`:
+
+1. Must include tracked artifacts: `proposal.md`, `design.md`, `tasks.md`
+2. Must include local run-log reference in proposal/design/tasks:
+   - `tmp/runs/evolution/` or
+   - `tmp/runs/evolution/index.md`
+
+Validation command:
+
+```bash
+python scripts/check_openspec_retention.py
+```
+
 Enable local commit-time enforcement once per clone:
 
 ```bash
@@ -115,4 +128,5 @@ This installs a local `pre-commit` hook that runs:
 python scripts/check_openspec_proposals.py --changed
 python scripts/check_openspec_tasks.py --changed
 python scripts/check_openspec_design.py --changed
+python scripts/check_openspec_retention.py --changed --require-local-ref
 ```
