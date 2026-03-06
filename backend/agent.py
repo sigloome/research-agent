@@ -552,58 +552,6 @@ class MainAgent:
             }
         return {"error": "run action requires skill name"}
 
-    def _synthesize_skill_results(
-        self, query: str, tool_runs: List[Dict[str, Any]]
-    ) -> str:
-        """Create a deterministic assistant summary from Skill tool outputs."""
-        lines: List[str] = []
-        lines.append("Here is what I found from project skills:")
-        lines.append("")
-
-        listed = False
-        for run in tool_runs:
-            if run.get("tool_name") != "Skill":
-                continue
-            input_obj = run.get("input", {})
-            output_obj = run.get("output", {})
-            if not isinstance(input_obj, dict) or not isinstance(output_obj, dict):
-                continue
-
-            action = str(input_obj.get("action", "")).strip().lower()
-            skill = str(input_obj.get("skill", "")).strip().lower()
-            if action == "list":
-                skills = output_obj.get("skills", [])
-                if isinstance(skills, list):
-                    names = []
-                    for item in skills:
-                        if isinstance(item, dict) and isinstance(item.get("name"), str):
-                            names.append(item["name"])
-                    if names:
-                        uniq = sorted(set(names))
-                        lines.append(f"- Available skills: {', '.join(uniq)}")
-                        listed = True
-            elif action == "run" and skill == "knowledge":
-                count = output_obj.get("result_count", 0)
-                lines.append(f"- Knowledge skill: found {count} local paper results.")
-                results = output_obj.get("results", [])
-                if isinstance(results, list):
-                    for item in results[:3]:
-                        if isinstance(item, dict):
-                            title = item.get("title") or item.get("id") or "Untitled"
-                            lines.append(f"  - {title}")
-            elif action == "run" and skill == "preference":
-                summary = output_obj.get("summary")
-                if isinstance(summary, str) and summary.strip():
-                    lines.append(f"- Preference skill summary: {summary.strip()}")
-                else:
-                    lines.append("- Preference skill summary: no preference summary available.")
-
-        if not listed:
-            lines.append("- Available skills were not returned in this run.")
-        lines.append("")
-        lines.append(f"Request handled: {query}")
-        return "\n".join(lines)
-
     async def _run_codex_bridge(
         self,
         query: str,
@@ -657,17 +605,23 @@ class MainAgent:
 
         tool_outputs_for_next_turn: Any = full_query
         bridge_tools = self._build_bridge_tools()
+        exhausted_tool_turns = True
+        final_context_prompt: Optional[str] = None
+        first_turn = True
 
         async with httpx.AsyncClient(timeout=120.0) as client:
             try:
                 for _ in range(self.max_tool_turns):
+                    active_tools = bridge_tools if final_context_prompt is None else []
                     payload: Dict[str, Any] = {
                         "model": self.codex_model,
                         "input": tool_outputs_for_next_turn,
                         "stream": True,
-                        "tools": bridge_tools,
                     }
-                    if skill_routed_query:
+                    if active_tools:
+                        payload["tools"] = active_tools
+                    # Force tool usage only on the initial skill-routed turn.
+                    if skill_routed_query and first_turn and active_tools:
                         payload["tool_choice"] = "required"
                     payload["instructions"] = self.get_system_prompt(user_preferences)
 
@@ -745,10 +699,52 @@ class MainAgent:
 
                     tool_calls = self._extract_tool_calls(completed_response)
                     if not tool_calls:
+                        exhausted_tool_turns = False
                         break
 
-                    next_inputs: List[Dict[str, Any]] = []
-                    tool_runs: List[Dict[str, Any]] = []
+                    if skill_routed_query:
+                        has_knowledge = False
+                        has_preference = False
+                        for call in tool_calls:
+                            if call.get("tool_name") != "Skill":
+                                continue
+                            tool_input = call.get("input", {})
+                            if not isinstance(tool_input, dict):
+                                continue
+                            if str(tool_input.get("action", "")).strip().lower() != "run":
+                                continue
+                            skill_name = str(tool_input.get("skill", "")).strip().lower()
+                            if skill_name == "knowledge":
+                                has_knowledge = True
+                            if skill_name == "preference":
+                                has_preference = True
+
+                        if not has_knowledge:
+                            tool_calls.append(
+                                {
+                                    "tool_call_id": "policy-knowledge",
+                                    "tool_name": "Skill",
+                                    "input": {
+                                        "action": "run",
+                                        "skill": "knowledge",
+                                        "query": "Summarize what is known about the user's profile/history from local project knowledge.",
+                                    },
+                                }
+                            )
+                        if not has_preference:
+                            tool_calls.append(
+                                {
+                                    "tool_call_id": "policy-preference",
+                                    "tool_name": "Skill",
+                                    "input": {
+                                        "action": "run",
+                                        "skill": "preference",
+                                        "query": "Summarize known user profile/history and preferences.",
+                                    },
+                                }
+                            )
+
+                    executed_tools: List[Dict[str, Any]] = []
                     for call in tool_calls:
                         tool_name = call["tool_name"]
                         call_id = call["tool_call_id"]
@@ -787,35 +783,24 @@ class MainAgent:
                                 "output": tool_output_obj,
                             }
                         )
-                        tool_runs.append(
+                        executed_tools.append(
                             {
                                 "tool_name": tool_name,
+                                "tool_call_id": call_id,
                                 "input": tool_input,
                                 "output": tool_output_obj,
                             }
                         )
-                        next_inputs.append(
-                            {
-                                "type": "function_call_output",
-                                "call_id": call_id,
-                                "output": json.dumps(tool_output_obj, ensure_ascii=False),
-                            }
-                        )
 
-                    if tool_runs:
-                        local_text = self._synthesize_skill_results(query, tool_runs)
-                        if local_text:
-                            for chunk in emit_start():
-                                yield chunk
-                            yield self._format_chunk(
-                                {
-                                    "type": "text-delta",
-                                    "id": text_part_id,
-                                    "delta": local_text,
-                                }
-                            )
-                            break
-                    tool_outputs_for_next_turn = next_inputs
+                    final_context_prompt = (
+                        "Use the following tool outputs to answer the original user request. "
+                        "Do not call tools again; provide the final response directly.\n\n"
+                        f"Original request:\n{query}\n\n"
+                        "Tool outputs (JSON):\n"
+                        f"{json.dumps(executed_tools, ensure_ascii=False)}"
+                    )
+                    tool_outputs_for_next_turn = final_context_prompt
+                    first_turn = False
 
             except Exception as e:
                 logger.error(f"Codex bridge execution error: {e}")
@@ -826,6 +811,23 @@ class MainAgent:
                 yield self._format_chunk({"type": "finish-step"})
                 yield self._format_chunk({"type": "finish", "finishReason": "error"})
                 return
+
+        if exhausted_tool_turns:
+            for chunk in emit_start():
+                yield chunk
+            yield self._format_chunk(
+                {
+                    "type": "error",
+                    "errorText": (
+                        f"Codex bridge exceeded max tool turns ({self.max_tool_turns}) "
+                        "without reaching a completion turn."
+                    ),
+                }
+            )
+            yield self._format_chunk({"type": "text-end", "id": text_part_id})
+            yield self._format_chunk({"type": "finish-step"})
+            yield self._format_chunk({"type": "finish", "finishReason": "error"})
+            return
 
         if skill_routed_query and not observed_skill_tool:
             for chunk in emit_start():
