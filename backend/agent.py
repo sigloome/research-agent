@@ -240,6 +240,29 @@ class MainAgent:
         ]
         return any(term in lower_query for term in skill_routing_terms)
 
+    def _should_enforce_skill_routing(self, query: str) -> bool:
+        """
+        Determine whether strict skill/tool enforcement is required.
+
+        Default mode is on-demand tools. Strict mode is enabled only when:
+        1) explicit env flag is on, or
+        2) user prompt explicitly demands skill-first/tool use.
+        """
+        env_force = os.environ.get("RESEARCH_STRICT_SKILL_ROUTING", "").strip().lower()
+        if env_force in {"1", "true", "yes", "on"}:
+            return True
+
+        lower_query = (query or "").lower()
+        explicit_phrases = [
+            "use skill tool",
+            "list available skills first",
+            "must use knowledge",
+            "must use preference",
+            "knowledge and preference",
+            "strict skill routing",
+        ]
+        return any(phrase in lower_query for phrase in explicit_phrases)
+
     def get_system_prompt(self, user_preferences: Optional[str] = None) -> str:
         """Build the system prompt with user preferences included."""
         prompt = self.base_system_prompt
@@ -366,7 +389,7 @@ class MainAgent:
         conversation_history: Optional[List[Dict[str, str]]],
     ) -> str:
         full_query = query
-        if self._is_skill_routed_query(query):
+        if self._should_enforce_skill_routing(query):
             full_query = (
                 "[MANDATORY TOOL ROUTING]\n"
                 "1) Call Skill tool to enumerate available skills before final answer.\n"
@@ -564,6 +587,7 @@ class MainAgent:
         usage_info: Dict[str, Any] = {}
         observed_skill_tool = False
         skill_routed_query = self._is_skill_routed_query(query)
+        enforce_skill_routing = self._should_enforce_skill_routing(query)
 
         headers: Dict[str, str] = {"Content-Type": "application/json"}
         if self.codex_auth_header_name and self.codex_auth_header_value:
@@ -621,7 +645,7 @@ class MainAgent:
                     if active_tools:
                         payload["tools"] = active_tools
                     # Force tool usage only on the initial skill-routed turn.
-                    if skill_routed_query and first_turn and active_tools:
+                    if enforce_skill_routing and first_turn and active_tools:
                         payload["tool_choice"] = "required"
                     payload["instructions"] = self.get_system_prompt(user_preferences)
 
@@ -702,7 +726,7 @@ class MainAgent:
                         exhausted_tool_turns = False
                         break
 
-                    if skill_routed_query:
+                    if enforce_skill_routing:
                         has_knowledge = False
                         has_preference = False
                         for call in tool_calls:
@@ -829,7 +853,7 @@ class MainAgent:
             yield self._format_chunk({"type": "finish", "finishReason": "error"})
             return
 
-        if skill_routed_query and not observed_skill_tool:
+        if enforce_skill_routing and not observed_skill_tool:
             for chunk in emit_start():
                 yield chunk
             yield self._format_chunk(
