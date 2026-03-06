@@ -312,7 +312,6 @@ async def delete_chat(chat_id: str):
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
-    logger.error(f"DEBUG: Entered chat_endpoint with message: {request.message} session: {request.session_id}")
     # Prefer single message with stateful backend
     latest_query = ""
     
@@ -325,7 +324,6 @@ async def chat_endpoint(request: ChatRequest):
                 latest_query = msg.get("content", "")
                 break
     
-    logger.error(f"DEBUG: Latest query determined: {latest_query}")
     if not latest_query:
         raise HTTPException(status_code=400, detail="No message provided")
 
@@ -429,20 +427,19 @@ async def chat_endpoint(request: ChatRequest):
                             # Backward-compatible fallback for legacy fixtures.
                             full_response += data["text"]
                 except Exception as e:
-                    logger.error(f"DEBUG: Error parsing chunk {repr(chunk)}: {e}")
+                    logger.warning("chat_stream_chunk_parse_failed", error=str(e))
                     
                 yield chunk
         except Exception as e:
-            logger.error(f"DEBUG: Streaming error in /api/chat: {e}")
+            logger.error("chat_stream_failed", error=str(e))
             yield f"data: {json.dumps({'type': 'error', 'errorText': str(e)})}\n\n"
         finally:
             # After stream ends, save response
-            logger.error(f"DEBUG: Stream finished. full_response len: {len(full_response)}")
             if full_response:
-                logger.error(f"DEBUG: Saving assistant message for chat {chat_id}")
+                logger.info("chat_stream_persist_assistant_message", chat_id=chat_id, length=len(full_response))
                 manager.save_message(chat_id, "assistant", full_response)
             else:
-                logger.error(f"DEBUG: No assistant response accumulated to save!")
+                logger.warning("chat_stream_empty_assistant_response", chat_id=chat_id)
         # Signal stream completion for DefaultChatTransport parser.
         yield "data: [DONE]\n\n"
 

@@ -334,15 +334,12 @@ class MainAgent:
         data: {"type":"start"|...}\n\n
         """
         try:
-            logger.error(f"DEBUG: chat_generator started for query: {query[:20]} session: {session_id}")
             async for msg in self.run(
                 query, 
                 chat_id=session_id, 
                 user_preferences=user_preferences,
                 conversation_history=conversation_history
             ):
-                # self.run yields SSE-formatted data events.
-                logger.error(f"DEBUG: chat_generator yielding chunk: {msg[:50]}...")
                 yield msg
         except Exception as e:
             logger.error(f"Chat generator error: {e}")
