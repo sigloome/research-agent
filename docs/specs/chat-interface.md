@@ -95,10 +95,14 @@ Request: {
 }
 
 Response: text/event-stream
-data: {"type": "text", "content": "I'll search..."}
-data: {"type": "tool", "name": "fetch_papers", "description": "Searching ArXiv for LLM papers"}
-data: {"type": "text", "content": "Found 5 papers..."}
-data: {"type": "done"}
+data: {"type":"start","messageId":"msg_123"}
+data: {"type":"text-delta","id":"txt_1","delta":"I'll check local project knowledge first. "}
+data: {"type":"tool-input-start","toolCallId":"call_1","toolName":"Skill"}
+data: {"type":"tool-input-available","toolCallId":"call_1","toolName":"Skill","input":{"action":"run","skill":"knowledge","query":"..."}}
+data: {"type":"tool-output-available","toolCallId":"call_1","output":"..."}
+data: {"type":"text-delta","id":"txt_1","delta":"Here are the key findings..."}
+data: {"type":"finish","finishReason":"stop"}
+data: [DONE]
 ```
 
 ### Preferences Endpoint

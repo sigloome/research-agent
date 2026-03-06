@@ -150,4 +150,4 @@ user_preferences (
 - ArXiv API
 - Semantic Scholar API (optional)
 - Z-Library (via MCP)
-- Claude API
+- Codex bridge (OpenAI-compatible Responses API endpoint)
