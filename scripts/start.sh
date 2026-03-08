@@ -14,6 +14,13 @@ if [ -f .env ]; then
   set +a
 fi
 
+# Optional local-only overrides (gitignored via .env.*)
+if [ -f .env.local ]; then
+  set -a
+  source .env.local
+  set +a
+fi
+
 # Load NVM for Node.js
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
