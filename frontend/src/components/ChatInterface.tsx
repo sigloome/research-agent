@@ -1,4 +1,6 @@
 import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle, memo, useMemo } from 'react'
+import { useChat, type UIMessage } from '@ai-sdk/react'
+import { DefaultChatTransport } from 'ai'
 import { useNavigate } from 'react-router-dom'
 import { ArrowUp, FileText, Copy, Check, Loader2, Square, SquareCheck, StickyNote, Menu, Maximize2, Minimize2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
@@ -426,56 +428,131 @@ const createMarkdownComponents = (navigate: any, onLibrarySearch: any) => ({
 
 
 
-const UserMessage = memo(function UserMessage({ content }: { content: string }) {
-  return <div className="bg-cream-200 rounded-xl px-4 py-3 text-warmstone-800 text-sm shadow-sm">{content}</div>
+const UserMessage = memo(function UserMessage({
+  content,
+  onEdit,
+}: {
+  content: string;
+  onEdit?: () => void;
+}) {
+  return (
+    <div className="group">
+      <div className="bg-cream-200 rounded-xl px-4 py-3 text-warmstone-800 text-sm shadow-sm">{content}</div>
+      {onEdit && (
+        <div className="mt-1 flex justify-end">
+          <button
+            onClick={onEdit}
+            className="text-xs text-warmstone-500 hover:text-warmstone-700 underline"
+            title="Edit and resend this message"
+          >
+            Edit
+          </button>
+        </div>
+      )}
+    </div>
+  );
 });
 
-
-interface Message {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-// Paper context for "Ask about this paper" feature
 interface PaperContext {
   paperId: string;
   paperTitle: string;
   suggestions: string[];
 }
 
-// Active tool indicator
-interface ActiveTool {
+interface ToolTimelineItem {
   id: string;
   name: string;
+  state: string;
   description: string;
+  isRunning: boolean;
+  isError: boolean;
 }
 
-// Active Tool Indicator Component
-const ActiveToolIndicator = memo(function ActiveToolIndicator({ tools }: { tools: ActiveTool[] }) {
-  if (tools.length === 0) return null;
+function extractMessageText(message: UIMessage): string {
+  return message.parts
+    .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+    .map(part => part.text)
+    .join('');
+}
 
-  const currentTool = tools[tools.length - 1];
+function stringifyPartValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (value == null) {
+    return '';
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function extractToolTimeline(message: UIMessage): ToolTimelineItem[] {
+  const runningStates = new Set(['input-streaming', 'input-available', 'approval-requested', 'approval-responded']);
+  const errorStates = new Set(['output-error', 'output-denied']);
+
+  const items: ToolTimelineItem[] = [];
+  for (let i = 0; i < message.parts.length; i += 1) {
+    const part = message.parts[i];
+    if (part.type !== 'dynamic-tool' && !part.type.startsWith('tool-')) {
+      continue;
+    }
+
+    const asRecord = part as Record<string, unknown>;
+    const toolName = part.type === 'dynamic-tool' ? String(asRecord.toolName ?? 'tool') : part.type.slice(5);
+    const state = typeof asRecord.state === 'string' ? asRecord.state : 'unknown';
+    const title = typeof asRecord.title === 'string' ? asRecord.title : '';
+    const outputText = stringifyPartValue(asRecord.output);
+    const inputText = stringifyPartValue(asRecord.input);
+    const description = title || outputText || inputText || 'No detail';
+
+    items.push({
+      id: String(asRecord.toolCallId ?? `${toolName}-${i}`),
+      name: toolName,
+      state,
+      description: description.length > 140 ? `${description.slice(0, 140)}...` : description,
+      isRunning: runningStates.has(state),
+      isError: errorStates.has(state),
+    });
+  }
+  return items;
+}
+
+function getLastUserText(messages: UIMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === 'user') {
+      return extractMessageText(messages[i]);
+    }
+  }
+  return '';
+}
+
+const ToolTimeline = memo(function ToolTimeline({ items }: { items: ToolTimelineItem[] }) {
+  if (items.length === 0) return null;
 
   return (
-    <div className="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg shadow-sm animate-in fade-in slide-in-from-bottom-2 duration-300">
-      <div className="relative">
-        <Loader2 size={16} className="text-blue-600 animate-spin" />
-        <span className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full animate-ping" />
+    <div className="mb-3 rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2">
+      <p className="mb-2 text-xs font-semibold text-blue-800">Tool Progress</p>
+      <div className="space-y-1.5">
+        {items.map(item => (
+          <div key={item.id} className="flex items-start gap-2 rounded-md bg-white/70 px-2 py-1.5">
+            {item.isRunning ? (
+              <Loader2 size={13} className="mt-0.5 shrink-0 animate-spin text-blue-600" />
+            ) : item.isError ? (
+              <Square size={13} className="mt-0.5 shrink-0 text-red-500" />
+            ) : (
+              <SquareCheck size={13} className="mt-0.5 shrink-0 text-green-600" />
+            )}
+            <div className="min-w-0">
+              <p className="truncate text-xs font-medium text-blue-900">{item.name}</p>
+              <p className="truncate text-xs text-blue-700">{item.description}</p>
+              <p className="text-[10px] uppercase tracking-wide text-blue-500">{item.state}</p>
+            </div>
+          </div>
+        ))}
       </div>
-      <div className="flex-1 min-w-0">
-        <span className="text-sm font-medium text-blue-800 truncate">
-          {currentTool.name}
-        </span>
-        <p className="text-xs text-blue-600 truncate">
-          {currentTool.description}
-        </p>
-      </div>
-      {tools.length > 1 && (
-        <span className="text-xs text-blue-500 bg-blue-100 px-2 py-0.5 rounded-full">
-          +{tools.length - 1} more
-        </span>
-      )}
     </div>
   );
 });
@@ -487,7 +564,17 @@ export interface ChatInterfaceHandle {
 }
 
 
-const AssistantMessage = memo(function AssistantMessage({ content, onLibrarySearch }: { content: string; onLibrarySearch?: (query: string) => void }) {
+const AssistantMessage = memo(function AssistantMessage({
+  content,
+  toolTimeline,
+  onRetry,
+  onLibrarySearch,
+}: {
+  content: string;
+  toolTimeline: ToolTimelineItem[];
+  onRetry?: () => void;
+  onLibrarySearch?: (query: string) => void;
+}) {
   // Memoize the parsing logic effectively
   const { cleanContent, researchTasks } = useMemo(() => parseContent(content), [content]);
 
@@ -552,10 +639,7 @@ const AssistantMessage = memo(function AssistantMessage({ content, onLibrarySear
 
   return (
     <div className="flex flex-col gap-2">
-      {/* Show Process Logs at the Top - HIDDEN PER USER REQUEST */}
-      {/* {toolSteps.length > 0 && <ThinkingProcess steps={toolSteps} />} */}
-
-      {/* Show Research Plan */}
+      <ToolTimeline items={toolTimeline} />
       {researchTasks.length > 0 && <ResearchPlan tasks={researchTasks} />}
 
       {hasContent && (
@@ -574,6 +658,15 @@ const AssistantMessage = memo(function AssistantMessage({ content, onLibrarySear
           <div className="px-4 py-2 bg-stone-50 border-t border-warmstone-100 flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
             <div className="flex items-center gap-2">
               <CopyButton text={cleanContent} />
+              {onRetry && (
+                <button
+                  onClick={onRetry}
+                  className="p-1 text-warmstone-400 hover:text-warmstone-600 transition-colors text-xs"
+                  title="Regenerate this response"
+                >
+                  Retry
+                </button>
+              )}
               <button
                 onClick={handleSaveNote}
                 disabled={isSaving}
@@ -592,19 +685,54 @@ const AssistantMessage = memo(function AssistantMessage({ content, onLibrarySear
 });
 
 const ChatInterface = forwardRef<ChatInterfaceHandle, ChatInterfaceProps>(({ onPaperAction, onLibrarySearch, isExpanded, onToggleExpand }, ref) => {
-  // Local state for messages and input
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [inputValue, setInputValue] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [isFetchingHistory, setIsFetchingHistory] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>(DEFAULT_SUGGESTIONS);
   const [paperContext, setPaperContext] = useState<PaperContext | null>(null);
-
-  // Active tool tracking - shows current tool/MCP/skill in use
-  const [activeTools, setActiveTools] = useState<ActiveTool[]>([]);
-
-  // Multi-Chat State
-  const [currentChatId, setCurrentChatId] = useState<string | null>(null); // Null means "New Chat" logic not yet created
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [uiError, setUiError] = useState<string | null>(null);
+
+  const {
+    messages,
+    setMessages,
+    sendMessage: sendChatMessage,
+    regenerate,
+    stop,
+    status,
+    error,
+    clearError,
+  } = useChat({
+    experimental_throttle: 40,
+    transport: new DefaultChatTransport({
+      api: '/api/chat',
+      prepareSendMessagesRequest: ({ messages: currentMessages, body }) => {
+        const requestBody = (body ?? {}) as Record<string, unknown>;
+        const apiMessage =
+          typeof requestBody.api_message === 'string'
+            ? requestBody.api_message
+            : getLastUserText(currentMessages);
+        const sessionId =
+          typeof requestBody.session_id === 'string'
+            ? requestBody.session_id
+            : 'default';
+
+        return {
+          body: {
+            message: apiMessage,
+            session_id: sessionId,
+          },
+        };
+      },
+    }),
+    onError: chatError => {
+      console.error("Chat error:", chatError);
+    },
+  });
+
+  const isStreaming = status === 'submitted' || status === 'streaming';
+  const isLoading = isStreaming || isFetchingHistory;
 
   // Generate suggestions for a specific paper
   const generatePaperSuggestions = useCallback((paperTitle: string): string[] => {
@@ -655,6 +783,7 @@ const ChatInterface = forwardRef<ChatInterfaceHandle, ChatInterfaceProps>(({ onP
   }, [fetchSuggestions]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    if (uiError) setUiError(null);
     setInputValue(e.target.value);
   };
 
@@ -662,36 +791,44 @@ const ChatInterface = forwardRef<ChatInterfaceHandle, ChatInterfaceProps>(({ onP
   const handleNewChat = () => {
     setCurrentChatId(null);
     setMessages([]);
+    setEditingMessageId(null);
+    clearError();
+    setUiError(null);
     if (window.innerWidth < 768) setIsSidebarOpen(false);
   };
 
   const handleSelectChat = async (chatId: string) => {
     setCurrentChatId(chatId);
     setMessages([]); // clear current
-    setIsLoading(true);
+    setEditingMessageId(null);
+    clearError();
+    setUiError(null);
+    setIsFetchingHistory(true);
     if (window.innerWidth < 768) setIsSidebarOpen(false);
     try {
       const res = await fetch(`/api/chats/${chatId}`);
       if (res.ok) {
         const data = await res.json();
-        // Map backend messages to UI model
-        const uiMessages: Message[] = data.map((m: any) => ({
+        const uiMessages: UIMessage[] = data.map((m: any) => ({
           id: String(m.id),
-          role: m.role,
-          content: m.content
+          role: m.role === 'assistant' ? 'assistant' : 'user',
+          parts: [{ type: 'text', text: String(m.content ?? ''), state: 'done' }],
         }));
         setMessages(uiMessages);
+      } else {
+        setUiError("Could not load chat history. Please retry.");
       }
     } catch (e) {
       console.error("Failed to load chat history", e);
+      setUiError("Could not load chat history. Please check your connection and retry.");
     } finally {
-      setIsLoading(false);
+      setIsFetchingHistory(false);
     }
   };
 
 
-  const sendMessage = async (content: string) => {
-    if (!content.trim() || isLoading) return;
+  const sendMessage = useCallback(async (content: string, options?: { messageId?: string }) => {
+    if (!content.trim() || isStreaming) return false;
 
     let activeChatId = currentChatId;
 
@@ -714,12 +851,14 @@ const ChatInterface = forwardRef<ChatInterfaceHandle, ChatInterfaceProps>(({ onP
         }
       } catch (e) {
         console.error("Error creating chat", e);
-        return; // Stop if can't create chat
+        setUiError("Could not create a new chat. Please check your connection and retry.");
+        return false;
       }
     }
 
     // If we have paper context, enhance the message with paper ID for the agent
-    let finalContent = content.trim();
+    const displayContent = content.trim();
+    let finalContent = displayContent;
     if (paperContext) {
       // Prepend context for the agent to use local DB
       finalContent = `[Context: Paper ID "${paperContext.paperId}" - "${paperContext.paperTitle}"]\n\n${finalContent}\n\nPlease use the read_paper tool to get details from the local database first.`;
@@ -727,150 +866,76 @@ const ChatInterface = forwardRef<ChatInterfaceHandle, ChatInterfaceProps>(({ onP
       clearPaperContext();
     }
 
-    const userMessage: Message = {
-      id: `user-${Date.now()}`,
-      role: 'user',
-      content: content.trim() // Show original content to user
-    };
-
-    const allMessages = [...messages, userMessage];
-    setMessages(allMessages);
-    setIsLoading(true);
-
-    // Use enhanced content for API call
-    // const apiMessages = [...messages, { ...userMessage, content: finalContent }];
-    const apiMessage = finalContent; // Only send the new message
-
     try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          // messages: apiMessages.map(m => ({ role: m.role, content: m.content }))
-          message: apiMessage,
-          session_id: activeChatId
-        })
-      });
-
-      if (!response.ok) throw new Error('API request failed');
-
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-
-      const assistantMessage: Message = {
-        id: `assistant-${Date.now()}`,
-        role: 'assistant',
-        content: ''
-      };
-      setMessages(prev => [...prev, assistantMessage]);
-
-      if (reader) {
-        let buffer = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || ""; // Keep incomplete line in buffer
-
-          for (const line of lines) {
-            if (!line.trim()) continue;
-
-            let textToAppend = "";
-
-            try {
-              if (line.startsWith('0:')) {
-                // Text stream 0:"quoted string" - model is responding, clear active tools
-                textToAppend = JSON.parse(line.slice(2));
-                // Clear active tools when text arrives (tool execution is complete)
-                setActiveTools([]);
-              }
-              else if (line.startsWith('d:')) {
-                // Data stream d:{"type":...}
-                const data = JSON.parse(line.slice(2));
-
-                // Handle tool events - add to active tools indicator
-                if (data.type === 'tool_start' || data.type === 'tool_usage') {
-                  const toolName = data.tool || 'Tool';
-                  const description = data.description || `Running ${toolName}...`;
-
-                  // Add to active tools (show in UI indicator)
-                  setActiveTools(prev => {
-                    // Avoid duplicates by tool name
-                    const exists = prev.some(t => t.name === toolName);
-                    if (exists) return prev;
-                    return [...prev, {
-                      id: `tool-${Date.now()}`,
-                      name: toolName,
-                      description
-                    }];
-                  });
-                  // Don't append text - the indicator shows the tool status
-                  // NOTE: We do NOT clear tools here; we wait for '0:' or 'meta' or stream end
-                } else if (data.type === 'research_event') {
-                  // Raw protocol marker (e.g. *PlanInit*...)
-                  textToAppend = `\n\n${data.raw}\n\n`;
-                } else if (data.type === 'meta') {
-                  // Final meta info - clear any remaining active tools
-                  setActiveTools([]);
-                }
-              }
-            } catch (e) {
-              console.error("Stream parse error:", e, "Line:", line);
-            }
-
-            if (textToAppend) {
-              setMessages(prev => {
-                const updated = [...prev];
-                const lastIndex = updated.length - 1;
-                const lastMsg = updated[lastIndex];
-                if (lastMsg.role === 'assistant') {
-                  updated[lastIndex] = {
-                    ...lastMsg,
-                    content: lastMsg.content + textToAppend
-                  };
-                }
-                return updated;
-              });
-            }
-          }
-        }
-      }
+      clearError();
+      setUiError(null);
+      await sendChatMessage(
+        options?.messageId
+          ? { text: displayContent, messageId: options.messageId }
+          : { text: displayContent },
+        {
+          body: {
+            session_id: activeChatId,
+            api_message: finalContent,
+          },
+        },
+      );
       onPaperAction?.();
-      // Refetch suggestions after message
       fetchSuggestions();
+      return true;
     } catch (e) {
-      console.error("Chat error:", e);
-      // Show error message
-      setMessages(prev => [...prev.slice(0, -1), {
-        id: `error-${Date.now()}`,
-        role: 'assistant',
-        content: `Error: ${e instanceof Error ? e.message : String(e)}`
-      }]);
-    } finally {
-      setIsLoading(false);
-      // Ensure active tool indicator is cleared when stream ends
-      setActiveTools([]);
+      console.error("Chat request failed:", e);
+      setUiError("Could not send message. Please retry.");
+      return false;
     }
-  };
+  }, [isStreaming, currentChatId, paperContext, clearPaperContext, clearError, sendChatMessage, onPaperAction, fetchSuggestions, setUiError]);
 
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!inputValue.trim() || isLoading) return;
+    if (!inputValue.trim() || isStreaming) return;
 
-    const text = inputValue;
-    setInputValue('');
-    await sendMessage(text);
+    const text = inputValue.trim();
+    const messageId = editingMessageId ?? undefined;
+    const sent = await sendMessage(text, messageId ? { messageId } : undefined);
+    if (sent) {
+      setInputValue('');
+      setEditingMessageId(null);
+    }
   };
 
   const append = async (msg: { role: string; content: string }) => {
     await sendMessage(msg.content);
   };
 
+  const handleEditMessage = useCallback((messageId: string, text: string) => {
+    setEditingMessageId(messageId);
+    setInputValue(text);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+    });
+  }, []);
+
+  const handleRetry = useCallback(async (messageId?: string) => {
+    if (!currentChatId) return;
+    clearError();
+    setUiError(null);
+    try {
+      await regenerate({
+        messageId,
+        body: { session_id: currentChatId },
+      });
+      fetchSuggestions();
+    } catch (retryError) {
+      console.error("Retry failed:", retryError);
+      setUiError("Could not retry the response. Please try again.");
+    }
+  }, [currentChatId, clearError, regenerate, fetchSuggestions]);
+
   // Expose methods to parent via ref
   useImperativeHandle(ref, () => ({
-    sendMessage,
+    sendMessage: async (content: string) => {
+      await sendMessage(content);
+    },
     prepareQuestionAboutPaper
   }), [sendMessage, prepareQuestionAboutPaper]);
 
@@ -939,7 +1004,7 @@ const ChatInterface = forwardRef<ChatInterfaceHandle, ChatInterfaceProps>(({ onP
           {/* Mobile Header for Sidebar Trigger - optional if handled by sidebar absolute button */}
           {/* Sidebar has a fixed button for mobile. */}
 
-          {messages.length === 0 ? (
+          {messages.length === 0 && !isFetchingHistory ? (
             <div className="flex flex-col items-center justify-center h-full px-4 py-12">
               {/* Suggestions */}
               <div className="text-center max-w-md">
@@ -949,7 +1014,9 @@ const ChatInterface = forwardRef<ChatInterfaceHandle, ChatInterfaceProps>(({ onP
                   {suggestions.map((text, index) => (
                     <button
                       key={`${text}-${index}`}
-                      onClick={() => append({ role: 'user', content: text })}
+                      onClick={() => {
+                        void sendMessage(text);
+                      }}
                       className="w-full text-left px-4 py-3 bg-white border border-warmstone-200 rounded-xl text-sm text-warmstone-700 hover:border-warmstone-300 hover:shadow-card transition-all"
                     >
                       {text}
@@ -959,22 +1026,40 @@ const ChatInterface = forwardRef<ChatInterfaceHandle, ChatInterfaceProps>(({ onP
               </div>
             </div>
           ) : (
-            <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
+            <div
+              className="max-w-3xl mx-auto px-4 py-6 space-y-4"
+              role="log"
+              aria-live="polite"
+              aria-relevant="additions text"
+              aria-label="Live chat transcript"
+            >
+              {isFetchingHistory && messages.length === 0 && (
+                <div className="flex items-center gap-2 text-warmstone-400 p-4">
+                  <Loader2 size={16} className="animate-spin" />
+                  <span className="text-sm">Loading chat history...</span>
+                </div>
+              )}
               {messages.map((m) => (
                 <div key={m.id}>
-                  {m.role === 'user' ? <UserMessage content={m.content} /> : <AssistantMessage content={m.content} onLibrarySearch={onLibrarySearch} />}
+                  {m.role === 'user' ? (
+                    <UserMessage
+                      content={extractMessageText(m)}
+                      onEdit={() => handleEditMessage(m.id, extractMessageText(m))}
+                    />
+                  ) : (
+                    <AssistantMessage
+                      content={extractMessageText(m)}
+                      toolTimeline={extractToolTimeline(m)}
+                      onRetry={() => handleRetry(m.id)}
+                      onLibrarySearch={onLibrarySearch}
+                    />
+                  )}
                 </div>
               ))}
               {isLoading && messages[messages.length - 1]?.role === 'user' && (
                 <div className="flex items-center gap-2 text-warmstone-400 p-4">
                   <Loader2 size={16} className="animate-spin" />
-                  <span className="text-sm">Thinking...</span>
-                </div>
-              )}
-              {/* Active Tool Indicator - shows current tool/MCP/skill in use */}
-              {activeTools.length > 0 && (
-                <div className="px-4 py-2">
-                  <ActiveToolIndicator tools={activeTools} />
+                  <span className="text-sm">{isFetchingHistory ? "Loading history..." : "Streaming..."}</span>
                 </div>
               )}
               <div ref={messagesEndRef} className="h-4" />
@@ -1018,6 +1103,53 @@ const ChatInterface = forwardRef<ChatInterfaceHandle, ChatInterfaceProps>(({ onP
               </div>
             )}
 
+            {editingMessageId && (
+              <div className="mb-2 flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                <span className="text-xs text-amber-800">Editing previous message. Sending will replace later turns.</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingMessageId(null);
+                    setInputValue('');
+                  }}
+                  className="text-xs text-amber-700 underline"
+                >
+                  Cancel edit
+                </button>
+              </div>
+            )}
+
+            {(status === 'error' && error) || uiError ? (
+              <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2" role="status" aria-live="polite">
+                <span className="text-xs text-red-700">
+                  {status === 'error' && error ? `Stream error: ${error.message}` : uiError}
+                </span>
+                <button
+                  type="button"
+                  className="text-xs text-red-700 underline"
+                  onClick={() => {
+                    if (status === 'error' && error) {
+                      void handleRetry();
+                      return;
+                    }
+                    void handleSubmit();
+                  }}
+                >
+                  Retry
+                </button>
+                <button
+                  type="button"
+                  className="text-xs text-red-700 underline"
+                  onClick={() => {
+                    clearError();
+                    setUiError(null);
+                  }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            ) : null}
+
             <form onSubmit={handleSubmit}>
               <div className="flex items-end gap-2 bg-white border border-warmstone-200 rounded-xl shadow-card focus-within:border-warmstone-300 transition-all">
                 <textarea
@@ -1030,14 +1162,27 @@ const ChatInterface = forwardRef<ChatInterfaceHandle, ChatInterfaceProps>(({ onP
                   rows={1}
                 />
                 <div className="p-2">
-                  <button
-                    type="submit"
-                    aria-label="Send message"
-                    disabled={isLoading || !inputValue.trim()}
-                    className="p-2 bg-warmstone-800 hover:bg-warmstone-700 disabled:bg-warmstone-300 text-white rounded-lg transition-all"
-                  >
-                    <ArrowUp size={16} />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {isStreaming && (
+                      <button
+                        type="button"
+                        aria-label="Stop streaming response"
+                        onClick={stop}
+                        className="p-2 bg-red-600 hover:bg-red-500 text-white rounded-lg transition-all"
+                        title="Stop"
+                      >
+                        <Square size={14} />
+                      </button>
+                    )}
+                    <button
+                      type="submit"
+                      aria-label={editingMessageId ? "Resend edited message" : "Send message"}
+                      disabled={isStreaming || !inputValue.trim()}
+                      className="p-2 bg-warmstone-800 hover:bg-warmstone-700 disabled:bg-warmstone-300 text-white rounded-lg transition-all"
+                    >
+                      <ArrowUp size={16} />
+                    </button>
+                  </div>
                 </div>
               </div>
             </form>
