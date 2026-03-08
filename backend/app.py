@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from backend.logging_config import get_api_logger
 from backend.agent import MainAgent
+from backend.multi_agent_runtime import parse_runtime_profile
 from skills.knowledge.paper.downloader import download_paper_content
 from skills.knowledge.summarizer.summarize import generate_summary
 from skills.knowledge.db import manager
@@ -266,6 +267,7 @@ class ChatRequest(BaseModel):
     messages: Optional[List[Dict[str, Any]]] = None
     message: Optional[str] = None
     session_id: str = "default"  # Add session_id support
+    runtime_profile: Optional[str] = None
 
     class Config:
         # Reject unknown request fields (e.g. model/provider) so model
@@ -404,7 +406,8 @@ async def chat_endpoint(request: ChatRequest):
                 latest_query, 
                 session_id=request.session_id, 
                 user_preferences=user_preferences,
-                conversation_history=conversation_history
+                conversation_history=conversation_history,
+                runtime_profile=parse_runtime_profile(request.runtime_profile),
             ):
                 # Parse SSE UI-message chunks for persistence.
                 try:

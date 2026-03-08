@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any, List
 
 import httpx
 from backend.logging_config import get_logger
+from backend.multi_agent_runtime import MultiAgentRuntime, RuntimeProfile
 
 logger = get_logger()
 
@@ -223,6 +224,7 @@ class MainAgent:
         
         self.client = None
         self.max_tool_turns = 6
+        self.multi_agent_runtime = MultiAgentRuntime()
 
     def _is_skill_routed_query(self, query: str) -> bool:
         """Detect whether a query should prioritize local skill runtime."""
@@ -320,7 +322,8 @@ class MainAgent:
         query: str, 
         session_id: str = "default", 
         user_preferences: Optional[str] = None,
-        conversation_history: Optional[List[Dict[str, str]]] = None
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        runtime_profile: Optional[RuntimeProfile] = None,
     ):
         """
         Async generator that yields text chunks from Claude Agent SDK Client.
@@ -338,7 +341,8 @@ class MainAgent:
                 query, 
                 chat_id=session_id, 
                 user_preferences=user_preferences,
-                conversation_history=conversation_history
+                conversation_history=conversation_history,
+                runtime_profile=runtime_profile,
             ):
                 yield msg
         except Exception as e:
@@ -355,7 +359,8 @@ class MainAgent:
         query: str, 
         chat_id: str, 
         user_preferences: Optional[str] = None,
-        conversation_history: Optional[List[Dict[str, str]]] = None
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        runtime_profile: Optional[RuntimeProfile] = None,
     ):
         """
         Internal async generator to run the agent and yield formatted messages.
@@ -368,6 +373,7 @@ class MainAgent:
             query=query,
             user_preferences=user_preferences,
             conversation_history=conversation_history,
+            runtime_profile=runtime_profile,
         ):
             yield chunk
 
@@ -577,8 +583,20 @@ class MainAgent:
         query: str,
         user_preferences: Optional[str],
         conversation_history: Optional[List[Dict[str, str]]],
+        runtime_profile: Optional[RuntimeProfile],
     ):
         full_query = self._build_full_query(query, user_preferences, conversation_history)
+        if runtime_profile is not None:
+            runtime_result = await self.multi_agent_runtime.run(
+                query=query,
+                profile=runtime_profile,
+                user_preferences=user_preferences,
+            )
+            full_query = (
+                f"{full_query}\n\n"
+                f"{runtime_result.answer_context}\n\n"
+                f"Verifier summary: {runtime_result.verifier_summary}"
+            )
         text_part_id = "text-1"
         started = False
         usage_info: Dict[str, Any] = {}
