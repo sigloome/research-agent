@@ -7,7 +7,7 @@ Usage:
     python scripts/update_specs.py
 
 This script:
-1. Scans all skills in .claude/skills/
+1. Scans all skills in project/runtime skill directories
 2. Updates docs/specs/skills-system.md with current skill list
 3. Generates stub spec files for new features
 4. Updates AGENTS.md with current skill list
@@ -17,13 +17,16 @@ import re
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
-SKILLS_DIR = PROJECT_ROOT / ".claude" / "skills"
+# Prefer project runtime skills. Fallback to codex home mirror if needed.
+SKILLS_DIR = PROJECT_ROOT / "skills"
+if not SKILLS_DIR.exists():
+    SKILLS_DIR = PROJECT_ROOT / ".codex" / "skills"
 SPECS_DIR = PROJECT_ROOT / "docs" / "specs"
 AGENT_MD = PROJECT_ROOT / "AGENTS.md"
 
 
 def get_all_skills() -> list:
-    """Get all skills from .claude/skills/."""
+    """Get all skills from runtime/codex skill directories."""
     skills = []
     
     for skill_dir in SKILLS_DIR.iterdir():

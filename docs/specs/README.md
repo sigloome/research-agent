@@ -53,6 +53,7 @@ Other features or services required.
 | [chat-interface.md](./chat-interface.md) | Active | Chat UI and streaming |
 | [user-preferences.md](./user-preferences.md) | Active | Preference learning |
 | [agent-evaluation-standard.md](./agent-evaluation-standard.md) | Active | Deterministic-first, flexible-oracle agent eval policy |
+| [auto-evolving-backend.md](./auto-evolving-backend.md) | Active | Canonical guide for automatic backend evolution, AI-resistant review, SDD/BDD/TDD enforcement, and artifact retention |
 
 ## Adding New Features
 

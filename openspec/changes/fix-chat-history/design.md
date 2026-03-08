@@ -36,3 +36,33 @@ The chat interface allows users to switch between multiple chat sessions. When s
 **[Risk] Existing chat sessions have no history** → Cannot be mitigated; those messages were never saved. Users will need to start new conversations to see history working.
 
 **[Risk] Silent failures in chunk parsing** → The existing error logging (`logger.error`) captures these. The fix addresses the immediate issue, but the pattern of silently continuing on parse errors could hide future bugs.
+
+## Rollback Plan
+
+1. Trigger conditions for rollback:
+   - New parsing/persistence regressions appear after applying the import fix.
+   - Chat history visibility worsens compared to baseline.
+2. Rollback steps:
+   - Revert the `backend/app.py` import change commit.
+   - Restore previous backend artifact state.
+3. Validation after rollback:
+   - Confirm stream endpoint still returns responses.
+   - Confirm known pre-fix behavior is restored (for diagnosis only).
+   - Re-run chat persistence checks to compare behavior.
+
+## Ownership
+
+1. Owner: Backend maintainer responsible for chat streaming parser path.
+2. Reviewer: Backend reviewer for API chat persistence behavior.
+3. Oncall: Backend oncall for rollback if regression occurs.
+
+## Metrics Instrumentation
+
+1. Metric: Assistant message persistence success rate.
+   - Source: chat persistence integration checks and API tests.
+   - Threshold: `>= 99.9%`.
+   - Window: per PR run and 7-day rolling post-deploy.
+2. Metric: Stream chunk parse exception rate.
+   - Source: backend error logs in `async_stream_generator`.
+   - Threshold: `<= baseline`, no sustained increase.
+   - Window: daily and weekly rollups.

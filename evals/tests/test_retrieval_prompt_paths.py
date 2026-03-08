@@ -67,6 +67,13 @@ def agt16_fixture():
 
 
 @pytest.fixture(scope="module")
+def codex_skill_routing_fixture():
+    return json.loads(
+        (KNOWLEDGE_FIXTURES / "codex_skill_routing_fixture.json").read_text(encoding="utf-8")
+    )
+
+
+@pytest.fixture(scope="module")
 def rag_critic_mocks():
     return json.loads((LLM_MOCKS / "rag_critic_outputs.json").read_text(encoding="utf-8"))
 
@@ -257,6 +264,18 @@ def test_agt_16_thresholds_and_fixture_requirements(agt16_fixture):
     )
     assert db_state["duplicate_chat_rows"] == 0
     assert db_state["persisted_response_completeness_ratio"] >= 0.99
+
+
+def test_codex_skill_routing_contract(codex_skill_routing_fixture):
+    parsed = evaluate_agt16_orchestration(
+        codex_skill_routing_fixture["stream_chunks"],
+        persisted_assistant_response="done",
+    )
+    tools = parsed["tool_sequence"]
+    assert "Skill" in tools
+    stream_text = "".join(codex_skill_routing_fixture["stream_chunks"])
+    assert '"skill":"knowledge"' in stream_text or '"skill": "knowledge"' in stream_text
+    assert '"skill":"preference"' in stream_text or '"skill": "preference"' in stream_text
 
 
 def test_pr_nightly_runner_guardrail(tasks):

@@ -172,9 +172,34 @@ fi
 
 if [[ "$overwrite_env" =~ ^[Yy]$ ]]; then
     echo "Creating .env file..."
-    echo "Please enter your Anthropic API Key:"
-    read -s anthropic_key
+    echo "Choose bridge auth method:"
+    echo "  1) OPENAI_API_KEY (Bearer)"
+    echo "  2) OPENAI_AUTH_HEADER_NAME + OPENAI_AUTH_HEADER_VALUE"
+    read -p "Select [1/2] (default 2): " auth_mode
     echo ""
+
+    openai_api_key=""
+    openai_auth_header_name="Byted-Authorization"
+    openai_auth_header_value=""
+    if [[ "$auth_mode" == "1" ]]; then
+        echo "Please enter your OPENAI_API_KEY:"
+        read -s openai_api_key
+        echo ""
+    else
+        read -p "OPENAI_AUTH_HEADER_NAME (default Byted-Authorization): " header_name_input
+        if [[ -n "$header_name_input" ]]; then
+            openai_auth_header_name="$header_name_input"
+        fi
+        echo "Please enter OPENAI_AUTH_HEADER_VALUE:"
+        read -s openai_auth_header_value
+        echo ""
+    fi
+
+    read -p "OPENAI_BASE_URL (e.g. https://your-bridge-host/v1, required): " openai_base_url
+    read -p "OPENAI_MODEL (default gpt-5.3-codex): " openai_model
+    if [[ -z "$openai_model" ]]; then
+        openai_model="gpt-5.3-codex"
+    fi
 
     echo "Would you like to configure Z-Library now? (Optional) (y/N)"
     read config_zlib
@@ -191,9 +216,13 @@ if [[ "$overwrite_env" =~ ^[Yy]$ ]]; then
     fi
 
     cat > .env <<EOL
-# Anthropic/Claude API Configuration
-ANTHROPIC_BASE_URL=https://api.anthropic.com
-ANTHROPIC_AUTH_TOKEN=${anthropic_key}
+# Codex Bridge Configuration
+AGENT_PROVIDER=codex_bridge
+OPENAI_BASE_URL=${openai_base_url}
+OPENAI_MODEL=${openai_model}
+OPENAI_API_KEY=${openai_api_key}
+OPENAI_AUTH_HEADER_NAME=${openai_auth_header_name}
+OPENAI_AUTH_HEADER_VALUE=${openai_auth_header_value}
 DISABLE_TELEMETRY=1
 
 # MCP Configuration

@@ -1,0 +1,18 @@
+{
+  "stream_chunks": [
+    "data: {\"type\":\"start\"}\n\n",
+    "data: {\"type\":\"start-step\"}\n\n",
+    "data: {\"type\":\"text-start\",\"id\":\"text-1\"}\n\n",
+    "data: {\"type\":\"tool-input-start\",\"toolCallId\":\"call-1\",\"toolName\":\"Skill\"}\n\n",
+    "data: {\"type\":\"tool-input-available\",\"toolCallId\":\"call-1\",\"toolName\":\"Skill\",\"input\":{\"action\":\"list\"}}\n\n",
+    "data: {\"type\":\"tool-input-start\",\"toolCallId\":\"call-2\",\"toolName\":\"Skill\"}\n\n",
+    "data: {\"type\":\"tool-input-available\",\"toolCallId\":\"call-2\",\"toolName\":\"Skill\",\"input\":{\"action\":\"run\",\"skill\":\"knowledge\"}}\n\n",
+    "data: {\"type\":\"tool-input-start\",\"toolCallId\":\"call-3\",\"toolName\":\"Skill\"}\n\n",
+    "data: {\"type\":\"tool-input-available\",\"toolCallId\":\"call-3\",\"toolName\":\"Skill\",\"input\":{\"action\":\"run\",\"skill\":\"preference\"}}\n\n",
+    "data: {\"type\":\"text-delta\",\"id\":\"text-1\",\"delta\":\"done\"}\n\n",
+    "data: {\"type\":\"text-end\",\"id\":\"text-1\"}\n\n",
+    "data: {\"type\":\"finish-step\"}\n\n",
+    "data: {\"type\":\"finish\",\"finishReason\":\"stop\"}\n\n",
+    "data: [DONE]\n\n"
+  ]
+}

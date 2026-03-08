@@ -1,5 +1,6 @@
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -30,6 +31,15 @@ from skills.preference.feedback import FeedbackEvent, process_feedback
 logger = get_api_logger()
 
 app = FastAPI(title="AI Paper Agent")
+
+@app.get("/api/health")
+async def health():
+    return {
+        "status": "ok",
+        "service": "backend",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "hmr_probe": "v2",
+    }
 
 @app.post("/api/feedback")
 async def submit_feedback(event: FeedbackEvent):
@@ -257,6 +267,11 @@ class ChatRequest(BaseModel):
     message: Optional[str] = None
     session_id: str = "default"  # Add session_id support
 
+    class Config:
+        # Reject unknown request fields (e.g. model/provider) so model
+        # selection remains server-owned.
+        extra = "forbid"
+
 
 @app.get("/api/chats", response_model=List[Chat])
 async def list_chats():
@@ -297,7 +312,6 @@ async def delete_chat(chat_id: str):
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
-    logger.error(f"DEBUG: Entered chat_endpoint with message: {request.message} session: {request.session_id}")
     # Prefer single message with stateful backend
     latest_query = ""
     
@@ -310,7 +324,6 @@ async def chat_endpoint(request: ChatRequest):
                 latest_query = msg.get("content", "")
                 break
     
-    logger.error(f"DEBUG: Latest query determined: {latest_query}")
     if not latest_query:
         raise HTTPException(status_code=400, detail="No message provided")
 
@@ -383,8 +396,7 @@ async def chat_endpoint(request: ChatRequest):
         logger.warning("preference_fetch_failed", error=str(e))
         user_preferences = None
 
-    # Use async generator for claude_agent_sdk streaming
-    # WRAPPER: Accumulate specific response
+    # Use async generator for SDK streaming and persist assistant text deltas.
     async def async_stream_generator():
         full_response = ""
         try:
@@ -394,55 +406,51 @@ async def chat_endpoint(request: ChatRequest):
                 user_preferences=user_preferences,
                 conversation_history=conversation_history
             ):
-                # The SDK `chat_generator` yields SSE formatted strings "data: ...\n\n" or "0:...\n"
-                
+                # Parse SSE UI-message chunks for persistence.
                 try:
-                    # Specific parsing for Vercel Protocol yielded by agent.py
-                    # Format: 0:"json_quoted_string"\n
-                    if chunk.startswith("0:"):
-                        # Strip 0: and trailing \n
-                        raw_val = chunk[2:].strip()
-                        if raw_val:
-                            text_val = json.loads(raw_val)
-                            if isinstance(text_val, str):
-                                full_response += text_val
-                                logger.error(f"DEBUG: Appended from 0: {text_val[:20]}... Total: {len(full_response)}")
-                    
-                    # Case 2: Standard SSE format (data: {"type": "content", "content": "..."}\n\n)
-                    elif chunk.startswith("data: "):
-                        json_str = chunk[6:].strip()
-                        if json_str and json_str != "[DONE]":
-                            data = json.loads(json_str)
-                            if isinstance(data, dict):
-                                if data.get("type") == "content" and "content" in data:
-                                    full_response += data["content"]
-                                    logger.error(f"DEBUG: Appended from data content: {data['content'][:20]}...")
-                                elif "text" in data: # Fallback for other potential formats
-                                    full_response += data["text"]
-                    # Case 3: Vercel Data format (d:{"type":...}\n)
-                    elif chunk.startswith("d:"):
-                        # Usually for tools/meta, not part of full_response text
-                        pass
+                    for line in chunk.splitlines():
+                        normalized = line.strip()
+                        if not normalized.startswith("data:"):
+                            continue
+                        payload = normalized[5:].strip()
+                        if not payload or payload == "[DONE]":
+                            continue
+                        data = json.loads(payload)
+                        if not isinstance(data, dict):
+                            continue
+                        if data.get("type") == "text-delta" and isinstance(data.get("delta"), str):
+                            full_response += data["delta"]
+                        elif data.get("type") == "content" and isinstance(data.get("content"), str):
+                            # Backward-compatible fallback for legacy fixtures.
+                            full_response += data["content"]
+                        elif isinstance(data.get("text"), str):
+                            # Backward-compatible fallback for legacy fixtures.
+                            full_response += data["text"]
                 except Exception as e:
-                    logger.error(f"DEBUG: Error parsing chunk {repr(chunk)}: {e}")
+                    logger.warning("chat_stream_chunk_parse_failed", error=str(e))
                     
                 yield chunk
+        except Exception as e:
+            logger.error("chat_stream_failed", error=str(e))
+            yield f"data: {json.dumps({'type': 'error', 'errorText': str(e)})}\n\n"
         finally:
             # After stream ends, save response
-            logger.error(f"DEBUG: Stream finished. full_response len: {len(full_response)}")
             if full_response:
-                logger.error(f"DEBUG: Saving assistant message for chat {chat_id}")
+                logger.info("chat_stream_persist_assistant_message", chat_id=chat_id, length=len(full_response))
                 manager.save_message(chat_id, "assistant", full_response)
             else:
-                logger.error(f"DEBUG: No assistant response accumulated to save!")
+                logger.warning("chat_stream_empty_assistant_response", chat_id=chat_id)
+        # Signal stream completion for DefaultChatTransport parser.
+        yield "data: [DONE]\n\n"
 
     return StreamingResponse(
         async_stream_generator(),
-        media_type="text/plain; charset=utf-8",
+        media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+            "x-vercel-ai-ui-message-stream": "v1",
         },
     )
 

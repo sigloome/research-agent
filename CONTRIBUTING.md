@@ -59,3 +59,121 @@ We enforce strict linting. Run this before every commit:
 2. Update Types (SDD).
 3. Implement Logic.
 4. Verify with `./scripts/lint.sh`.
+
+## OpenSpec Proposal Requirements
+
+For any change under `openspec/changes/<change-id>/proposal.md`, include these required sections:
+
+1. `## Why`
+2. `## What Changes`
+3. `## Expected Benefit`
+4. `## Success Metrics`
+5. `## Risk Metrics`
+6. `## Kill Criteria`
+
+Use `openspec/changes/_templates/proposal.md` as the baseline template.
+
+Validation command:
+
+```bash
+python scripts/check_openspec_proposals.py
+```
+
+For any change under `openspec/changes/<change-id>/tasks.md`, include:
+
+1. `## BDD Evidence` with Given/When/Then wording
+2. `## TDD Evidence` with failing-test -> implemented -> passing trace
+
+Validation command:
+
+```bash
+python scripts/check_openspec_tasks.py
+```
+
+For any change under `openspec/changes/<change-id>/design.md`, include:
+
+1. `## Risks / Trade-offs`
+2. `## Rollback Plan`
+3. `## Ownership` (owner/reviewer/oncall)
+4. `## Metrics Instrumentation` (metric/source/threshold/window)
+
+Validation command:
+
+```bash
+python scripts/check_openspec_design.py
+```
+
+Retention requirement for each active `openspec/changes/<change-id>/`:
+
+1. Must include tracked artifacts: `proposal.md`, `design.md`, `tasks.md`
+2. Must include local run-log reference in proposal/design/tasks:
+   - `tmp/runs/evolution/` or
+   - `tmp/runs/evolution/index.md`
+
+Validation command:
+
+```bash
+python scripts/check_openspec_retention.py
+```
+
+Enable local commit-time enforcement once per clone:
+
+```bash
+./scripts/setup-git-hooks.sh
+```
+
+This installs a local `pre-commit` hook that runs:
+
+```bash
+python scripts/check_openspec_proposals.py --changed
+python scripts/check_openspec_tasks.py --changed
+python scripts/check_openspec_design.py --changed
+python scripts/check_openspec_retention.py --changed --require-local-ref
+```
+
+## Local Evolution Cycle Runner
+
+Run a complete local evolution validation cycle and persist a report:
+
+```bash
+./scripts/run_evolution_cycle.sh
+```
+
+This executes:
+
+1. OpenSpec proposal/tasks/design/retention validators
+2. Deterministic eval suite (`pr` profile)
+3. Deterministic eval tests
+
+Reports are stored under:
+
+- `tmp/runs/evolution/<timestamp>.md`
+- `tmp/runs/evolution/index.md`
+
+### Claude SDK Skill Auto-Loading Check
+
+To enforce SDK-native (non-manual) skill usage in runtime agent config:
+
+```bash
+python scripts/check_claude_skill_config.py
+```
+
+This verifies:
+
+1. `setting_sources=["user", "project"]` in `backend/agent.py`
+2. `allowed_tools` includes `"Skill"`
+3. `cwd` is set to project root (`self.cwd`) for proper project-skill discovery
+
+## Local TODO Continuity
+
+Maintain local TODO continuity files so work can resume in new sessions:
+
+1. `tmp/todos/active.md` for prioritized unfinished items
+2. `tmp/todos/handoff.md` for latest context and first next task
+3. `tmp/todos/done.md` for completed milestones
+
+Expected routine:
+
+1. Read `active.md` and `handoff.md` before starting implementation.
+2. Update `handoff.md` at end of session.
+3. Move completed items from `active.md` to `done.md`.

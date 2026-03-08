@@ -133,7 +133,7 @@ Required evals:
 
 Required deterministic methods:
 
-1. Stream `d:` tool-trace parsing.
+1. Streamed UI-message chunk parsing for tool traces (`tool-input-*`, `tool-output-*`).
 2. Citation URL validation.
 3. Output hygiene regex checks.
 
@@ -206,7 +206,7 @@ Required evals:
    - no hidden content or partial-tag leakage in user-visible output
 2. `AGT-16` app orchestration robustness:
    - concurrent/default session chat creation safety
-   - mixed stream format parsing (`0:`, `data:`, `d:`) completeness
+   - standardized SSE UI-message stream parsing completeness (`data: { "type": ... }`)
    - persisted assistant response integrity
 
 Required deterministic methods:

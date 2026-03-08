@@ -72,12 +72,12 @@ There is a necessary deviation to support Python imports while following the spe
 71: ### Components
 72:
 73: 1. **Core Domain (`core.py`)**
-74:    - **Constraint**: Pure Python. NO imports from `fastapi`, `claude_agent_sdk`, or framework-specific code.
+74:    - **Constraint**: Pure Python. NO imports from `fastapi`, bridge SDK clients, or framework-specific code.
 75:    - **Responsibility**: Business logic, data transformation, database calls.
 76:    - **Input/Output**: Typed Pydantic models or standard Python types.
 77:
 78: 2. **Agent Adapter (`tool.py`)** [Optional if using default exports]
-79:    - **Constraint**: Must conform to `claude_agent_sdk` Tool interface.
+79:    - **Constraint**: Must conform to the runtime function-tool contract used by the active bridge/SDK path.
 80:    - **Responsibility**: Wraps `core.py` functions for the LLM. Handles descriptions, "thinking" steps, and simplified I/O suitable for tokens.
 81:
 82: 3. **API Adapter (`api.py` or `server.py`)** [Optional]
@@ -225,7 +225,7 @@ Response: [
   {
     "name": "paper-search",
     "description": "Search ArXiv papers",
-    "path": ".claude/skills/paper_search/SKILL.md"
+    "path": "skills/knowledge/SKILL.md"
   }
 ]
 ```
