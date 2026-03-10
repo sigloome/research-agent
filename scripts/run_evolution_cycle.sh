@@ -6,10 +6,12 @@ RUNS_DIR="$ROOT_DIR/tmp/runs/evolution"
 TIMESTAMP="$(date +"%Y%m%d-%H%M%S")"
 REPORT_PATH="$RUNS_DIR/$TIMESTAMP.md"
 INDEX_PATH="$RUNS_DIR/index.md"
+LIVE_BENCH_CMD="$ROOT_DIR/scripts/run_live_benchmark.sh"
 
 mkdir -p "$RUNS_DIR"
 
 status="PASS"
+soft_warn_count=0
 start_iso="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
 {
@@ -41,6 +43,26 @@ run_step() {
   fi
 }
 
+run_soft_warning_step() {
+  local name="$1"
+  local cmd="$2"
+  echo "- [ ] $name" >>"$REPORT_PATH"
+  echo "Running (soft-warning): $name"
+  if bash -lc "$cmd" >>"$REPORT_PATH" 2>&1; then
+    perl -0pi -e "s/- \\[ \\] \Q$name\E/- [x] $name/" "$REPORT_PATH"
+    echo "  ok"
+  else
+    perl -0pi -e "s/- \\[ \\] \Q$name\E/- [!] $name/" "$REPORT_PATH"
+    soft_warn_count=$((soft_warn_count + 1))
+    echo "" >>"$REPORT_PATH"
+    echo "### Soft warning: $name" >>"$REPORT_PATH"
+    echo "- Command: \`$cmd\`" >>"$REPORT_PATH"
+    echo "- Note: non-blocking failure; deterministic result unchanged." >>"$REPORT_PATH"
+    echo "" >>"$REPORT_PATH"
+    echo "  warning (non-blocking)"
+  fi
+}
+
 {
   run_step "OpenSpec proposal validation" "python $ROOT_DIR/scripts/check_openspec_proposals.py"
   run_step "OpenSpec tasks validation" "python $ROOT_DIR/scripts/check_openspec_tasks.py"
@@ -52,6 +74,27 @@ run_step() {
   run_step "Deterministic eval tests" "pytest -q evals/tests/test_retrieval_prompt_paths.py -q"
 } || true
 
+{
+  echo
+  echo "## Live Benchmark (Non-Blocking)"
+  echo
+} >>"$REPORT_PATH"
+
+if [[ -x "$LIVE_BENCH_CMD" ]]; then
+  run_soft_warning_step "Live benchmark run" "$LIVE_BENCH_CMD"
+else
+  soft_warn_count=$((soft_warn_count + 1))
+  {
+    echo "- [!] Live benchmark run"
+    echo
+    echo "### Soft warning: Live benchmark run"
+    echo "- Command: \`$LIVE_BENCH_CMD\`"
+    echo "- Note: script missing or not executable; non-blocking."
+    echo
+  } >>"$REPORT_PATH"
+  echo "soft warning: live benchmark script missing/non-executable"
+fi
+
 end_iso="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
 {
@@ -59,6 +102,7 @@ end_iso="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   echo "## Summary"
   echo
   echo "- Result: **$status**"
+  echo "- Soft warnings (non-blocking): **$soft_warn_count**"
   echo "- Finished (UTC): $end_iso"
   echo
 } >>"$REPORT_PATH"

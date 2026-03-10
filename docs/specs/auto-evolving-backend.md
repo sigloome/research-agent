@@ -220,6 +220,8 @@ A feature is complete only if all are true:
 1. **Phase 0: Governance First**
    - Apply this specification, templates, and local commit-time checks.
    - Use `scripts/run_evolution_cycle.sh` to produce deterministic local run reports in `tmp/runs/evolution/`.
+   - `scripts/run_evolution_cycle.sh` MUST run `scripts/run_live_benchmark.sh` after each iteration and record failures as non-blocking soft warnings.
+   - Full periodic live benchmark is optional and currently disabled by default.
    - Use `scripts/trigger_evolution.sh` to scaffold follow-up changes when a run fails.
    - Use `scripts/new_evolution_change.sh <change-id> [title]` for manual bootstrap with mandatory sections.
    - Use `scripts/generate_evolution_candidates.sh` to produce manual-assisted candidate task lists (no code changes).

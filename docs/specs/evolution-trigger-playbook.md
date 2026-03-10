@@ -8,6 +8,8 @@ Operational command guide for automatic evolution flow with deterministic-first 
 
 1. Run deterministic evolution cycle:
    - `scripts/run_evolution_cycle.sh`
+   - The cycle auto-runs `scripts/run_live_benchmark.sh` after deterministic checks.
+   - Live benchmark failures are recorded as soft warnings only (non-blocking).
 2. On FAIL, trigger script auto-creates:
    - OpenSpec change scaffold (`openspec/changes/auto-evo-<timestamp>/`)
    - candidate task list (`tmp/runs/evolution/candidates/<timestamp>.md`)
@@ -31,6 +33,15 @@ Operational command guide for automatic evolution flow with deterministic-first 
   - `done_marker_rate < 0.98`
   - `tool_failure_rate > 0.02`
   - `latency_p95_ms > 30000`
+
+## Benchmark Cadence Policy
+
+1. Per-iteration live benchmark:
+   - Enabled by default via `scripts/run_evolution_cycle.sh`.
+   - Non-blocking; warning-only.
+2. Periodic full live benchmark:
+   - Not enabled for now.
+   - Can be added later as an explicit opt-in workflow.
 
 ## Run-Log Sync
 
