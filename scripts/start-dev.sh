@@ -66,6 +66,15 @@ npm run dev -- --port "$FRONTEND_PORT" > ../logs/frontend.dev.log 2>&1 &
 FRONTEND_PID=$!
 cd ..
 
+echo "Running listener sanity check..."
+if ! BACKEND_PORT="$BACKEND_PORT" FRONTEND_PORT="$FRONTEND_PORT" scripts/check_dev_listener_sanity.sh; then
+  echo "Listener sanity failed right after startup; stopping services."
+  kill "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null || true
+  cleanup_listeners "$BACKEND_PORT"
+  cleanup_listeners "$FRONTEND_PORT"
+  exit 1
+fi
+
 echo "Backend PID: $BACKEND_PID"
 echo "Frontend PID: $FRONTEND_PID"
 echo ""

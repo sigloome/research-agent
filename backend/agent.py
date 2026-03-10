@@ -225,6 +225,8 @@ class MainAgent:
         
         self.client = None
         self.max_tool_turns = 6
+        self.max_http_retries = int(os.environ.get("BRIDGE_MAX_HTTP_RETRIES", "1"))
+        self.http_timeout_seconds = float(os.environ.get("BRIDGE_HTTP_TIMEOUT_SECONDS", "120"))
         self.multi_agent_runtime = MultiAgentRuntime()
 
     def _is_skill_routed_query(self, query: str) -> bool:
@@ -407,6 +409,45 @@ class MainAgent:
         if base.endswith("/responses"):
             return base
         return f"{base}/responses"
+
+    def _build_bridge_headers(self) -> Dict[str, str]:
+        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        if self.codex_auth_header_name and self.codex_auth_header_value:
+            headers[self.codex_auth_header_name] = self.codex_auth_header_value
+        elif os.getenv("OPENAI_API_KEY"):
+            headers["Authorization"] = f"Bearer {os.getenv('OPENAI_API_KEY')}"
+        return headers
+
+    def _bridge_auth_preflight_error(self, headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        responses_url = self._codex_responses_url()
+        if not responses_url:
+            return {"type": "error", "errorText": "Missing OPENAI_BASE_URL for codex_bridge provider"}
+        if not any(k.lower() in ("authorization", "byted-authorization") for k in headers):
+            return {
+                "type": "error",
+                "errorText": "Missing bridge authentication: set OPENAI_AUTH_HEADER_* or OPENAI_API_KEY",
+            }
+        return None
+
+    def _build_bridge_payload(
+        self,
+        input_data: Any,
+        user_preferences: Optional[str],
+        active_tools: List[Dict[str, Any]],
+        enforce_skill_routing: bool,
+        first_turn: bool,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "model": self.codex_model,
+            "input": input_data,
+            "stream": True,
+            "instructions": self.get_system_prompt(user_preferences),
+        }
+        if active_tools:
+            payload["tools"] = active_tools
+        if enforce_skill_routing and first_turn and active_tools:
+            payload["tool_choice"] = "required"
+        return payload
 
     def _build_full_query(
         self,
@@ -630,29 +671,12 @@ class MainAgent:
         skill_routed_query = self._is_skill_routed_query(query)
         enforce_skill_routing = self._should_enforce_skill_routing(query)
 
-        headers: Dict[str, str] = {"Content-Type": "application/json"}
-        if self.codex_auth_header_name and self.codex_auth_header_value:
-            headers[self.codex_auth_header_name] = self.codex_auth_header_value
-        elif os.getenv("OPENAI_API_KEY"):
-            headers["Authorization"] = f"Bearer {os.getenv('OPENAI_API_KEY')}"
-
+        headers = self._build_bridge_headers()
+        preflight_error = self._bridge_auth_preflight_error(headers)
         responses_url = self._codex_responses_url()
-        if not responses_url:
+        if preflight_error is not None:
             yield self._format_chunk(
-                {
-                    "type": "error",
-                    "errorText": "Missing OPENAI_BASE_URL for codex_bridge provider",
-                }
-            )
-            yield self._format_chunk({"type": "finish", "finishReason": "error"})
-            return
-
-        if not any(k.lower() in ("authorization", "byted-authorization") for k in headers):
-            yield self._format_chunk(
-                {
-                    "type": "error",
-                    "errorText": "Missing bridge authentication: set OPENAI_AUTH_HEADER_* or OPENAI_API_KEY",
-                }
+                preflight_error
             )
             yield self._format_chunk({"type": "finish", "finishReason": "error"})
             return
@@ -690,90 +714,105 @@ class MainAgent:
         final_context_prompt: Optional[str] = None
         first_turn = True
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=self.http_timeout_seconds) as client:
             try:
                 for _ in range(self.max_tool_turns):
                     active_tools = bridge_tools if final_context_prompt is None else []
-                    payload: Dict[str, Any] = {
-                        "model": self.codex_model,
-                        "input": tool_outputs_for_next_turn,
-                        "stream": True,
-                    }
-                    if active_tools:
-                        payload["tools"] = active_tools
-                    # Force tool usage only on the initial skill-routed turn.
-                    if enforce_skill_routing and first_turn and active_tools:
-                        payload["tool_choice"] = "required"
-                    payload["instructions"] = self.get_system_prompt(user_preferences)
+                    payload = self._build_bridge_payload(
+                        input_data=tool_outputs_for_next_turn,
+                        user_preferences=user_preferences,
+                        active_tools=active_tools,
+                        enforce_skill_routing=enforce_skill_routing,
+                        first_turn=first_turn,
+                    )
 
                     completed_response: Optional[Dict[str, Any]] = None
                     current_event: Optional[str] = None
                     data_lines: List[str] = []
 
-                    async with client.stream(
-                        "POST",
-                        responses_url,
-                        headers=headers,
-                        json=payload,
-                    ) as response:
-                        if response.status_code >= 400:
-                            body = (await response.aread()).decode("utf-8", errors="replace")
+                    attempt = 0
+                    while True:
+                        try:
+                            async with client.stream(
+                                "POST",
+                                responses_url,
+                                headers=headers,
+                                json=payload,
+                            ) as response:
+                                if response.status_code >= 500 and attempt < self.max_http_retries:
+                                    attempt += 1
+                                    continue
+                                if response.status_code >= 400:
+                                    body = (await response.aread()).decode("utf-8", errors="replace")
+                                    yield self._format_chunk(
+                                        {
+                                            "type": "error",
+                                            "errorText": f"Codex bridge error {response.status_code}: {body[:300]}",
+                                        }
+                                    )
+                                    yield self._format_chunk({"type": "finish", "finishReason": "error"})
+                                    return
+
+                                async for raw_line in response.aiter_lines():
+                                    line = raw_line.strip()
+                                    if not line:
+                                        if not data_lines:
+                                            current_event = None
+                                            continue
+                                        data_blob = "\n".join(data_lines)
+                                        data_lines = []
+                                        if not data_blob:
+                                            current_event = None
+                                            continue
+                                        try:
+                                            event_payload = json.loads(data_blob)
+                                        except Exception:
+                                            current_event = None
+                                            continue
+
+                                        event_type = current_event or event_payload.get("type")
+                                        if event_type == "response.created":
+                                            for chunk in emit_start():
+                                                yield chunk
+                                        elif event_type == "response.output_text.delta":
+                                            for chunk in emit_start():
+                                                yield chunk
+                                            delta = event_payload.get("delta", "")
+                                            if isinstance(delta, str) and delta:
+                                                yield self._format_chunk(
+                                                    {
+                                                        "type": "text-delta",
+                                                        "id": text_part_id,
+                                                        "delta": delta,
+                                                    }
+                                                )
+                                        elif event_type == "response.completed":
+                                            response_obj = event_payload.get("response", {})
+                                            if isinstance(response_obj, dict):
+                                                completed_response = response_obj
+                                                usage = response_obj.get("usage")
+                                                if isinstance(usage, dict):
+                                                    usage_info = usage
+                                        current_event = None
+                                        continue
+
+                                    if line.startswith("event:"):
+                                        current_event = line[6:].strip()
+                                    elif line.startswith("data:"):
+                                        data_lines.append(line[5:].strip())
+                            break
+                        except (httpx.ReadTimeout, httpx.ConnectTimeout):
+                            if attempt < self.max_http_retries:
+                                attempt += 1
+                                continue
                             yield self._format_chunk(
                                 {
                                     "type": "error",
-                                    "errorText": f"Codex bridge error {response.status_code}: {body[:300]}",
+                                    "errorText": "Codex bridge timeout after retry; returning error envelope",
                                 }
                             )
                             yield self._format_chunk({"type": "finish", "finishReason": "error"})
                             return
-
-                        async for raw_line in response.aiter_lines():
-                            line = raw_line.strip()
-                            if not line:
-                                if not data_lines:
-                                    current_event = None
-                                    continue
-                                data_blob = "\n".join(data_lines)
-                                data_lines = []
-                                if not data_blob:
-                                    current_event = None
-                                    continue
-                                try:
-                                    event_payload = json.loads(data_blob)
-                                except Exception:
-                                    current_event = None
-                                    continue
-
-                                event_type = current_event or event_payload.get("type")
-                                if event_type == "response.created":
-                                    for chunk in emit_start():
-                                        yield chunk
-                                elif event_type == "response.output_text.delta":
-                                    for chunk in emit_start():
-                                        yield chunk
-                                    delta = event_payload.get("delta", "")
-                                    if isinstance(delta, str) and delta:
-                                        yield self._format_chunk(
-                                            {
-                                                "type": "text-delta",
-                                                "id": text_part_id,
-                                                "delta": delta,
-                                            }
-                                        )
-                                elif event_type == "response.completed":
-                                    response_obj = event_payload.get("response", {})
-                                    if isinstance(response_obj, dict):
-                                        completed_response = response_obj
-                                        usage = response_obj.get("usage")
-                                        if isinstance(usage, dict):
-                                            usage_info = usage
-                                current_event = None
-                                continue
-
-                            if line.startswith("event:"):
-                                current_event = line[6:].strip()
-                            elif line.startswith("data:"):
-                                data_lines.append(line[5:].strip())
 
                     if not completed_response:
                         break
