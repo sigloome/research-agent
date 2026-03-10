@@ -58,6 +58,12 @@ def _normalize_payload_event(payload: Any, raw_line: str) -> StreamEvent:
                     raw=raw_line,
                 )
 
+        # Per-agent runtime trace chunk.
+        if chunk_type == "agent-trace":
+            role = payload.get("role")
+            if isinstance(role, str):
+                return StreamEvent(kind="meta", payload=payload, raw=raw_line)
+
         # Legacy tool usage fallback.
         if chunk_type == "tool_usage" and isinstance(payload.get("tool"), str):
             return StreamEvent(kind="tool_usage", payload=payload, raw=raw_line)

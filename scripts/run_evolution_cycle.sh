@@ -78,6 +78,14 @@ echo "Evolution cycle complete: $status"
 echo "Report: $REPORT_PATH"
 echo "Index:  $INDEX_PATH"
 
+if [[ -x "$ROOT_DIR/scripts/trigger_evolution.sh" ]]; then
+  "$ROOT_DIR/scripts/trigger_evolution.sh" "$status" "$REPORT_PATH" "run_evolution_cycle"
+fi
+
+if [[ -x "$ROOT_DIR/scripts/promotion_workflow.sh" ]]; then
+  "$ROOT_DIR/scripts/promotion_workflow.sh" || true
+fi
+
 if [[ "$status" != "PASS" ]]; then
   exit 1
 fi

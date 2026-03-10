@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+
+echo "Running pre-push deterministic quality gates..."
+
+python scripts/check_openspec_proposals.py --changed
+python scripts/check_openspec_tasks.py --changed
+python scripts/check_openspec_design.py --changed
+python scripts/check_openspec_retention.py --changed --require-local-ref
+python scripts/check_ownership_policy.py
+
+pytest -q tests/backend/test_bdd_chat_flow.py
+pytest -q evals/tests/test_retrieval_prompt_paths.py evals/tests/test_retrieval_prompt_paths_audit.py
+
+echo "pre-push checks passed."

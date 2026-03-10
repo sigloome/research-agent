@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -354,6 +355,28 @@ class MainAgent:
         """Encode a UI message chunk as SSE data event."""
         return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
+    def _format_trace_event(
+        self,
+        trace_id: str,
+        role: str,
+        stage: str,
+        status: str,
+        latency_ms: Optional[int] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        payload: Dict[str, Any] = {
+            "type": "agent-trace",
+            "traceId": trace_id,
+            "role": role,
+            "stage": stage,
+            "status": status,
+        }
+        if latency_ms is not None:
+            payload["latencyMs"] = latency_ms
+        if details:
+            payload["details"] = details
+        return self._format_chunk(payload)
+
     async def run(
         self, 
         query: str, 
@@ -586,6 +609,7 @@ class MainAgent:
         runtime_profile: Optional[RuntimeProfile],
     ):
         full_query = self._build_full_query(query, user_preferences, conversation_history)
+        trace_id = f"trace-{int(time.time() * 1000)}"
         if runtime_profile is not None:
             runtime_result = await self.multi_agent_runtime.run(
                 query=query,
@@ -597,6 +621,8 @@ class MainAgent:
                 f"{runtime_result.answer_context}\n\n"
                 f"Verifier summary: {runtime_result.verifier_summary}"
             )
+        else:
+            runtime_result = None
         text_part_id = "text-1"
         started = False
         usage_info: Dict[str, Any] = {}
@@ -635,12 +661,28 @@ class MainAgent:
             nonlocal started
             if started:
                 return []
-            started = True
-            return [
+            chunks = [
                 self._format_chunk({"type": "start"}),
                 self._format_chunk({"type": "start-step"}),
                 self._format_chunk({"type": "text-start", "id": text_part_id}),
             ]
+            if runtime_result is not None:
+                for envelope in runtime_result.handoffs:
+                    chunks.append(
+                        self._format_trace_event(
+                            trace_id=trace_id,
+                            role=envelope.role.value,
+                            stage="handoff",
+                            status="ok" if envelope.ok else "error",
+                            latency_ms=envelope.latency_ms,
+                            details={
+                                "fallback_used": envelope.fallback_used,
+                                "error_code": envelope.error.code if envelope.error else None,
+                            },
+                        )
+                    )
+            started = True
+            return chunks
 
         tool_outputs_for_next_turn: Any = full_query
         bridge_tools = self._build_bridge_tools()

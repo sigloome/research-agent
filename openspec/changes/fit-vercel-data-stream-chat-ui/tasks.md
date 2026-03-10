@@ -38,3 +38,7 @@
 1. Failing test introduced: AGT-16 stream/orchestration contract updates required before migration completion.
 2. Implemented backend/frontend protocol and parser migration to satisfy the contract.
 3. Passing verification: `4.1`, `4.2`, and `4.3` completed with deterministic and E2E validation.
+
+## Run Log Sync
+
+- Synced evolution report: `/Users/bytedance/code/anti-demo/tmp/runs/evolution/20260310-165800.md`

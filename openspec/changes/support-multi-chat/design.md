@@ -70,3 +70,7 @@ We will map the DB `chat_id` directly to the `ClaudeSDKClient`'s `session_id`.
    - Source: backend logs/monitoring counters.
    - Threshold: no increase above `+0.5%` absolute.
    - Window: 24-hour and 7-day rolling windows.
+
+## Run Log Sync
+
+- Synced evolution report: `/Users/bytedance/code/anti-demo/tmp/runs/evolution/20260310-165800.md`

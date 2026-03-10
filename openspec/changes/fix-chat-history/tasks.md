@@ -18,3 +18,7 @@
 1. Failing test introduced: verification expectations for persistence/history behavior captured in section `2`.
 2. Implemented minimal fix by restoring `json` import required for stream-chunk parsing and accumulation.
 3. Passing verification: checks `2.1` and `2.2` completed successfully.
+
+## Run Log Sync
+
+- Synced evolution report: `/Users/bytedance/code/anti-demo/tmp/runs/evolution/20260310-165800.md`

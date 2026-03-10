@@ -48,3 +48,7 @@ Users currently have a single ephemeral chat session. To support complex workflo
 ## Local Run Logs
 
 - Retention index: tmp/runs/evolution/index.md
+
+## Run Log Sync
+
+- Synced evolution report: `/Users/bytedance/code/anti-demo/tmp/runs/evolution/20260310-165800.md`

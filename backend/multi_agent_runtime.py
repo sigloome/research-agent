@@ -67,6 +67,7 @@ class RuntimeResult:
     route: str
     handoffs: List[HandoffEnvelope]
     answer_context: str
+    answer_envelope: HandoffEnvelope
     verifier_summary: str
 
 
@@ -96,11 +97,14 @@ class MultiAgentRuntime:
         handoffs.append(verifier)
 
         context = self._build_answer_context(query=query, handoffs=handoffs)
+        answer = self._answer_handoff(query=query, handoffs=handoffs, context=context)
+        handoffs.append(answer)
         return RuntimeResult(
             profile=profile,
             route=route,
             handoffs=handoffs,
             answer_context=context,
+            answer_envelope=answer,
             verifier_summary=verifier.payload.get("summary", ""),
         )
 
@@ -257,6 +261,23 @@ class MultiAgentRuntime:
             f"{serializable}"
         )
 
+    def _answer_handoff(
+        self, query: str, handoffs: List[HandoffEnvelope], context: str
+    ) -> HandoffEnvelope:
+        started = time.perf_counter()
+        payload = {
+            "query": query,
+            "context_preview": context[:400],
+            "handoff_count": len(handoffs),
+            "mode": "answer_synthesis_ready",
+        }
+        return HandoffEnvelope(
+            role=AgentRole.ANSWER,
+            ok=True,
+            payload=payload,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+        )
+
 
 def parse_runtime_profile(raw: Optional[str]) -> Optional[RuntimeProfile]:
     if raw is None:
@@ -271,4 +292,3 @@ def parse_runtime_profile(raw: Optional[str]) -> Optional[RuntimeProfile]:
     if normalized in {"graph_critic", "graph+critic", "graph_retrieval_critic"}:
         return RuntimeProfile.GRAPH_CRITIC
     return None
-

@@ -101,3 +101,7 @@ Rationale: repo policy requires deterministic-first eval alignment when prompt/t
 
 - Should a follow-up change add resumable stream endpoints (`GET /api/chat/{id}/stream`) for full reconnect semantics?
 - Should we hard-stop exposing raw internal tool event payloads and enforce a strict frontend-safe schema?
+
+## Run Log Sync
+
+- Synced evolution report: `/Users/bytedance/code/anti-demo/tmp/runs/evolution/20260310-165800.md`

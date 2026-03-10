@@ -28,5 +28,11 @@ jobs:
       - name: Check runtime skill accessibility
         run: python scripts/check_skill_runtime_access.py
 
+      - name: Check OpenSpec ownership policy
+        run: python scripts/check_ownership_policy.py
+
+      - name: Run executable BDD gate tests
+        run: pytest -q tests/backend/test_bdd_chat_flow.py
+
       - name: Run deterministic retrieval eval tests
         run: pytest -q evals/tests/test_retrieval_prompt_paths.py evals/tests/test_retrieval_prompt_paths_audit.py

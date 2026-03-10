@@ -128,6 +128,7 @@ Review is mandatory for all features, including the auto-evolving subsystem itse
    - Required: executable Given/When/Then acceptance scenarios.
 3. **Test Gate (TDD)**
    - Required: failing tests introduced first, then passing after implementation.
+   - Required: executable BDD gate tests pass for affected behavior paths.
 4. **Deterministic Eval Gate**
    - Required: pass deterministic contracts in `evals/` and feature tests.
 5. **Safety/Protocol Gate**
@@ -219,6 +220,9 @@ A feature is complete only if all are true:
 1. **Phase 0: Governance First**
    - Apply this specification, templates, and local commit-time checks.
    - Use `scripts/run_evolution_cycle.sh` to produce deterministic local run reports in `tmp/runs/evolution/`.
+   - Use `scripts/trigger_evolution.sh` to scaffold follow-up changes when a run fails.
+   - Use `scripts/new_evolution_change.sh <change-id> [title]` for manual bootstrap with mandatory sections.
+   - Use `scripts/generate_evolution_candidates.sh` to produce manual-assisted candidate task lists (no code changes).
 2. **Phase 1: Assisted Evolution**
    - Auto-generate proposals/candidates; human approves promotions.
 3. **Phase 2: Constrained Autonomy**

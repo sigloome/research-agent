@@ -48,3 +48,7 @@ Chat history fails to display when switching between chats because assistant mes
 ## Local Run Logs
 
 - Retention index: tmp/runs/evolution/index.md
+
+## Run Log Sync
+
+- Synced evolution report: `/Users/bytedance/code/anti-demo/tmp/runs/evolution/20260310-165800.md`

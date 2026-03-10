@@ -34,11 +34,14 @@ def test_runtime_baseline_handoffs(monkeypatch):
         AgentRole.RETRIEVAL,
         AgentRole.PREFERENCE,
         AgentRole.VERIFIER,
+        AgentRole.ANSWER,
     ]
     retrieval = result.handoffs[1]
     assert retrieval.ok is True
     assert retrieval.payload["mode"] == "baseline_local_vector"
     assert retrieval.fallback_used is False
+    assert result.answer_envelope.role == AgentRole.ANSWER
+    assert result.answer_envelope.ok is True
 
 
 def test_runtime_retrieval_fallback(monkeypatch):

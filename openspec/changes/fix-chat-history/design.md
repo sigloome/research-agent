@@ -66,3 +66,7 @@ The chat interface allows users to switch between multiple chat sessions. When s
    - Source: backend error logs in `async_stream_generator`.
    - Threshold: `<= baseline`, no sustained increase.
    - Window: daily and weekly rollups.
+
+## Run Log Sync
+
+- Synced evolution report: `/Users/bytedance/code/anti-demo/tmp/runs/evolution/20260310-165800.md`

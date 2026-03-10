@@ -5,6 +5,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,20 @@ import pytest
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+if "sentence_transformers" not in sys.modules:
+    stub_mod = types.ModuleType("sentence_transformers")
+
+    class _StubSentenceTransformer:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def encode(self, texts):
+            size = len(texts) if texts is not None else 0
+            return [[0.0] * 384 for _ in range(size)]
+
+    stub_mod.SentenceTransformer = _StubSentenceTransformer
+    sys.modules["sentence_transformers"] = stub_mod
 
 
 @pytest.fixture(scope="session")
