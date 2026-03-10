@@ -8,6 +8,7 @@ Deterministic-first eval scaffolding for retrieval/custom-prompt paths.
 - `fixtures/knowledge/`: deterministic knowledge/state fixtures.
 - `fixtures/llm_mocks/`: mocked LLM outputs for critic/summarizer/bridge contracts.
 - `metrics/`: deterministic contract check modules.
+  - includes parser-backed claim/evidence grounding checks (`claim_grounding.py`).
 - `adapters/`: stream parsing and trace mapping adapters.
 - `runners/`: suite guardrails and run-profile selection.
 - `tests/`: deterministic gate tests and weekly-audit tests.
