@@ -28,6 +28,7 @@ downloads/
 
 # npm
 .npm-cache/
+backend/codex_sdk_adapter/node_modules/
 
 # IDE
 .idea/
