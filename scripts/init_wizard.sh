@@ -216,8 +216,8 @@ if [[ "$overwrite_env" =~ ^[Yy]$ ]]; then
     fi
 
     cat > .env <<EOL
-# Codex Bridge Configuration
-AGENT_PROVIDER=codex_bridge
+# Codex SDK Configuration
+AGENT_PROVIDER=codex_sdk
 OPENAI_BASE_URL=${openai_base_url}
 OPENAI_MODEL=${openai_model}
 OPENAI_API_KEY=${openai_api_key}

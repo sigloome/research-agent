@@ -29,7 +29,7 @@ rm -f "$health_body"
 echo "[ok] health"
 
 step "codex bridge config check"
-python3 scripts/check_codex_bridge_config.py || fail "codex bridge config check failed"
+python3 scripts/check_codex_sdk_config.py || fail "codex sdk config check failed"
 echo "[ok] codex bridge config"
 
 step "runtime skill accessibility check"

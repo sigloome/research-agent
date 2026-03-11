@@ -35,7 +35,7 @@ This change completes remaining backlog items for runtime simplification, listen
    - result: `31 passed`
 
 3. Runtime config + script checks
-   - `python scripts/check_codex_bridge_config.py`
+   - `python scripts/check_codex_sdk_config.py`
    - `bash -n scripts/start-dev.sh`
    - `tmp/interview_pack/scripts/export_weekly_trends.py`
    - result: pass + weekly export generated

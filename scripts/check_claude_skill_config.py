@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 def main() -> int:
     checks = [
-        ["python3", str(REPO_ROOT / "scripts" / "check_codex_bridge_config.py")],
+        ["python3", str(REPO_ROOT / "scripts" / "check_codex_sdk_config.py")],
         ["python3", str(REPO_ROOT / "scripts" / "check_skill_runtime_access.py")],
     ]
     for cmd in checks:

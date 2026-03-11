@@ -1,0 +1,17 @@
+{
+  "name": "codex_sdk_adapter",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "main": "run_stream.mjs",
+  "scripts": {
+    "stream": "node run_stream.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "Local bridge from Python backend to @openai/codex-sdk",
+  "dependencies": {
+    "@openai/codex-sdk": "^0.114.0"
+  }
+}

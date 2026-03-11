@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any, List
 
 import httpx
 from backend.logging_config import get_logger
+from backend.codex_sdk_runtime import stream_codex_sdk
 from backend.multi_agent_runtime import MultiAgentRuntime, RuntimeProfile
 
 logger = get_logger()
@@ -97,15 +98,15 @@ def generate_tool_description(tool_name: str, tool_input: Dict[str, Any]) -> str
 
 class MainAgent:
     """
-    Main AI Agent using codex bridge (OpenAI-compatible Responses API).
+    Main AI Agent using local Codex SDK adapter runtime.
     
     This is the single unified agent that handles all tasks including research.
     Uses built-in SDK tools (WebSearch, WebFetch, Read, Write, Bash) directly.
     """
     
     def __init__(self):
-        # Get API credentials from environment
-        self.provider = os.environ.get("AGENT_PROVIDER", "codex_bridge").strip().lower()
+        # Single-provider runtime: local Codex SDK adapter.
+        self.provider = "codex_sdk"
         self.codex_base_url = os.environ.get("OPENAI_BASE_URL", "").strip()
         self.codex_model = os.environ.get("OPENAI_MODEL", "gpt-5.3-codex")
         self.codex_auth_header_name = os.environ.get(
@@ -311,13 +312,13 @@ class MainAgent:
         return prompt
 
     async def initialize(self):
-        """Initialize provider runtime (bridge-only mode)."""
+        """Initialize single-provider runtime."""
         logger.info(
             "agent_provider_initialized",
-            provider="codex_bridge",
+            provider=self.provider,
             model=self.codex_model,
             model_source="server_startup_env",
-            endpoint=self._codex_responses_url(),
+            endpoint="local://codex-sdk-adapter",
         )
 
     async def chat_generator(
@@ -394,11 +395,29 @@ class MainAgent:
                              This is used when resuming a historical chat session
                              that the SDK doesn't have in memory.
         """
-        async for chunk in self._run_codex_bridge(
+        async for chunk in self._run_codex_sdk(
             query=query,
             user_preferences=user_preferences,
             conversation_history=conversation_history,
             runtime_profile=runtime_profile,
+        ):
+            yield chunk
+
+    async def _run_codex_sdk(
+        self,
+        query: str,
+        user_preferences: Optional[str],
+        conversation_history: Optional[List[Dict[str, str]]],
+        runtime_profile: Optional[RuntimeProfile],
+    ):
+        _ = user_preferences
+        _ = conversation_history
+        _ = runtime_profile
+        async for chunk in stream_codex_sdk(
+            format_chunk=self._format_chunk,
+            query=query,
+            cwd=self.cwd,
+            codex_model=self.codex_model,
         ):
             yield chunk
 
