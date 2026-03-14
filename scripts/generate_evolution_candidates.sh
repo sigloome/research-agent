@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 RUNS_DIR="$ROOT_DIR/tmp/runs/evolution"
 INDEX_PATH="$RUNS_DIR/index.md"
 OUT_DIR="$RUNS_DIR/candidates"
-HANDOFF_PATH="$ROOT_DIR/tmp/todos/handoff.md"
+HANDOFF_PATH="$ROOT_DIR/todos/handoff.md"
 
 mkdir -p "$RUNS_DIR" "$OUT_DIR"
 

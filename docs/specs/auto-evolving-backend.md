@@ -179,7 +179,7 @@ Store durable decisions here:
 Store transient work context here:
 
 1. `tmp/proposals/` for working drafts and research notes.
-2. `tmp/todo_ideas.md` (or `tmp/todos/<topic>.md`) for TODO queues.
+2. `tmp/todo_ideas.md` (or `todos/<topic>.md`) for TODO queues.
 3. `tmp/runs/evolution/` for run logs, experiment outputs, and diagnostics.
 
 ### Synchronization Rule
@@ -192,9 +192,9 @@ No merge is valid if only local notes contain the rationale or acceptance criter
 
 To ensure seamless continuation across sessions, coding agents MUST maintain local TODO files:
 
-1. `tmp/todos/active.md` for prioritized unfinished work.
-2. `tmp/todos/handoff.md` for session handoff context and immediate next action.
-3. `tmp/todos/done.md` for completed local milestones.
+1. `todos/active.md` for prioritized unfinished work.
+2. `todos/handoff.md` for session handoff context and immediate next action.
+3. `todos/done.md` for completed local milestones.
 
 Agent behavior requirements:
 

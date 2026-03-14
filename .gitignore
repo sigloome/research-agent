@@ -44,6 +44,9 @@ htmlcov/
 *.tmp
 tmp/
 test-results/
+/.codex-agent-runtime/
+/output/
+/frontend/playwright-report/
 
 # Local Claude worktrees
 .claude/worktrees/

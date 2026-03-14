@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 RUNS_DIR="$ROOT_DIR/tmp/runs/evolution"
 INDEX_PATH="$RUNS_DIR/index.md"
-HANDOFF_PATH="$ROOT_DIR/tmp/todos/handoff.md"
+HANDOFF_PATH="$ROOT_DIR/todos/handoff.md"
 SCAFFOLD_SCRIPT="$ROOT_DIR/scripts/new_evolution_change.sh"
 CANDIDATE_SCRIPT="$ROOT_DIR/scripts/generate_evolution_candidates.sh"
 
