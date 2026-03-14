@@ -6,13 +6,12 @@ This file can be modified via update_skill_code and hot reloaded.
 import json
 from typing import Any, Dict, List, Optional
 
+from backend.event_bus import EventType, emit
 from backend.logging_config import get_skill_logger
 from skills.knowledge.db import manager
+from skills.knowledge.paper.id_utils import canonicalize_arxiv_id, resolve_paper_id
 from skills.knowledge.paper_search import fetcher
 from skills.knowledge.summarizer import summarize
-from skills.knowledge.paper_search import fetcher
-from skills.knowledge.summarizer import summarize
-from backend.event_bus import emit, EventType
 
 logger = get_skill_logger("paper")
 
@@ -59,10 +58,27 @@ def extract_tags_from_abstract(abstract: str) -> list:
     return tags[:5] if tags else ["AI"]
 
 
+def _is_ingest_complete(paper: Dict[str, Any]) -> bool:
+    required = (
+        "summary_main_ideas",
+        "summary_methods",
+        "summary_results",
+        "summary_limitations",
+        "full_text_local_path",
+    )
+    return all(str(paper.get(field, "")).strip() for field in required)
+
+
+def _emit_fetch_rag_index(paper: Dict[str, Any]) -> None:
+    content_to_index = f"Paper Title: {paper.get('title')}\nAbstract: {paper.get('abstract')}"
+    logger.debug("emitting_paper_added", paper_id=paper.get("id"))
+    emit(EventType.PAPER_ADDED, payload={"content": content_to_index}, source="fetch_papers")
+
+
 def fetch_papers(
     query: str, sort_by: str = "recent", max_results: int = 5, source_id: Optional[int] = None
 ) -> List[Dict[str, Any]]:
-    """Fetches papers from ArXiv/S2, summarizes them, and adds to DB."""
+    """Fetch from ArXiv, persist metadata, then run ingest for durable local retrieval."""
     logger.info("fetch_papers", query=query, sort_by=sort_by, max_results=max_results)
     arxiv_sort = "submittedDate"
     if sort_by == "relevance":
@@ -80,32 +96,42 @@ def fetch_papers(
     results = []
 
     for p in papers:
-        existing = manager.get_paper(p["id"])
-        if existing and existing.get("summary_main_ideas"):
+        paper_id = str(p.get("id", "")).strip()
+        if not paper_id:
+            continue
+        existing = manager.get_paper(paper_id)
+        if existing and _is_ingest_complete(existing):
             results.append(existing)
             continue
 
-        # Generate quick summary from abstract only (skip full summarization for speed)
         try:
-            # Use a simpler summary generation - just extract key info without LLM call
-            p["tags"] = extract_tags_from_abstract(p.get("abstract", ""))
-            p["summary_main_ideas"] = p.get("abstract", "")[:500]
-            p["source_id"] = source_id  # Associate with source
-            p["source_id"] = source_id  # Associate with source
-            manager.add_paper(p)
-
-            # TRIGGER RAG SYNC
-            # TRIGGER RAG SYNC (Decoupled)
-            # Index abstract + title for global understanding
-            content_to_index = f"Paper Title: {p.get('title')}\nAbstract: {p.get('abstract')}"
-            logger.debug("emitting_paper_added", paper_id=p.get("id"))
-            emit(
-                EventType.PAPER_ADDED, payload={"content": content_to_index}, source="fetch_papers"
-            )
-
+            if existing is None:
+                p["tags"] = extract_tags_from_abstract(p.get("abstract", ""))
+                p["summary_main_ideas"] = p.get("abstract", "")[:500]
+                p["source_id"] = source_id
+                manager.add_paper(p)
+                _emit_fetch_rag_index(p)
+            ingest_result = paper_ingest(paper_id, force_update=False, source_id=source_id)
+            ingested = manager.get_paper(paper_id)
+            if ingested:
+                results.append(ingested)
+            elif existing:
+                results.append(existing)
+            else:
+                results.append(p)
+            if not ingest_result.get("ok"):
+                logger.warning(
+                    "paper_ingest_incomplete_after_fetch",
+                    paper_id=paper_id,
+                    missing_fields=ingest_result.get("missing_fields", []),
+                    error=ingest_result.get("error"),
+                )
         except Exception as e:
             logger.error("paper_processing_failed", paper_id=p.get("id"), error=str(e))
-        results.append(p)
+            if existing:
+                results.append(existing)
+            else:
+                results.append(p)
 
     return results
 
@@ -130,8 +156,7 @@ def add_paper_by_url(url: str, source_id: Optional[int] = None) -> str:
 
     summary = summarize.generate_summary(p["abstract"], p["title"])
     p.update(summary)
-    p["source_id"] = source_id  # Associate with source
-    p["source_id"] = source_id  # Associate with source
+    p["source_id"] = source_id
     manager.add_paper(p)
 
     # TRIGGER RAG SYNC
@@ -145,30 +170,130 @@ def add_paper_by_url(url: str, source_id: Optional[int] = None) -> str:
 
 from skills.knowledge.paper import downloader
 from skills.knowledge.paper.downloader import PaperWithdrawnError
-from skills.knowledge.summarizer import summarize
+
+
+def _extract_arxiv_id(source: str) -> Optional[str]:
+    return canonicalize_arxiv_id(source or "")
+
+
+def paper_ingest(
+    source: str,
+    *,
+    force_update: bool = False,
+    source_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Codex-native ingest contract:
+    1) persist local content (full_text_local_path)
+    2) persist key summary fields for retrieval
+    Returns a structured success/failure envelope.
+    """
+    if not source or not str(source).strip():
+        return {"ok": False, "status": "failed", "error": "source is required"}
+
+    # Local PDF path ingest path
+    source_text = str(source).strip()
+    if source_text.lower().endswith(".pdf"):
+        imported = local_files_ops.import_pdf(source_text)
+        if isinstance(imported, dict) and imported.get("error"):
+            return {
+                "ok": False,
+                "status": "failed",
+                "error": imported["error"],
+                "source": source_text,
+            }
+        paper_id = imported.get("id") if isinstance(imported, dict) else None
+        if not paper_id:
+            return {
+                "ok": False,
+                "status": "failed",
+                "error": "local import did not return paper id",
+                "source": source_text,
+            }
+    else:
+        # ArXiv URL / ID ingest path
+        arxiv_id = _extract_arxiv_id(source_text)
+        if not arxiv_id:
+            return {
+                "ok": False,
+                "status": "failed",
+                "error": "unsupported source format; provide arxiv id/url or local pdf path",
+                "source": source_text,
+            }
+
+        existing = manager.get_paper(arxiv_id)
+        if existing is None:
+            paper = fetcher.get_arxiv_paper_by_id(arxiv_id)
+            if not paper:
+                return {
+                    "ok": False,
+                    "status": "failed",
+                    "error": f"failed to fetch metadata for arxiv id {arxiv_id}",
+                    "source": source_text,
+                }
+            if source_id is None:
+                source_id = get_source_id_for_type("arxiv")
+            paper["source_id"] = source_id
+            manager.add_paper(paper)
+        paper_id = arxiv_id
+
+    analyzed = analyze_paper(resolve_paper_id(str(paper_id)), force_update=force_update)
+    local_path = analyzed.get("full_text_local_path")
+    key_fields = [
+        "summary_main_ideas",
+        "summary_methods",
+        "summary_results",
+        "summary_limitations",
+    ]
+    missing = [f for f in key_fields if not str(analyzed.get(f, "")).strip()]
+    if missing:
+        fallback_text = (
+            str(analyzed.get("summary_main_ideas", "")).strip()
+            or str(analyzed.get("abstract", "")).strip()
+            or "Summary not available from parser; please review full text."
+        )
+        for field in missing:
+            analyzed[field] = fallback_text
+        manager.add_paper(analyzed)
+        missing = [f for f in key_fields if not str(analyzed.get(f, "")).strip()]
+    local_ok = bool(local_path and str(local_path).strip())
+    ok = local_ok and not missing
+
+    return {
+        "ok": ok,
+        "status": "success" if ok else "failed",
+        "paper_id": analyzed.get("id"),
+        "title": analyzed.get("title"),
+        "local_path": local_path,
+        "missing_fields": missing,
+        "content_source": analyzed.get("content_source"),
+    }
 
 def analyze_paper(paper_id: str, force_update: bool = False) -> Dict[str, Any]:
     """
     Downloads full text (HTML/PDF) and generates AI summary for a paper.
     """
-    logger.info("analyze_paper", paper_id=paper_id)
-    paper = manager.get_paper(paper_id)
+    resolved_paper_id = resolve_paper_id(paper_id)
+    logger.info("analyze_paper", paper_id=resolved_paper_id)
+    paper = manager.get_paper(resolved_paper_id)
     if not paper:
-        raise ValueError(f"Paper {paper_id} not found")
+        raise ValueError(f"Paper {resolved_paper_id} not found")
 
     # 1. Download Content if missing
     # 1. Download Content if missing or forced
-    full_text = manager.get_paper_full_text(paper_id)
+    full_text = manager.get_paper_full_text(resolved_paper_id)
     if not full_text or force_update:
         # Construct URLs
-        html_url = f"https://arxiv.org/html/{paper_id}"
-        pdf_url = f"https://arxiv.org/pdf/{paper_id}.pdf"
+        html_url = f"https://arxiv.org/html/{resolved_paper_id}"
+        pdf_url = f"https://arxiv.org/pdf/{resolved_paper_id}.pdf"
         
         save_dir = manager.DATA_DIR / "papers"
         try:
-            saved_path = downloader.download_paper_content(paper_id, html_url, pdf_url, save_dir)
+            saved_path = downloader.download_paper_content(
+                resolved_paper_id, html_url, pdf_url, save_dir
+            )
         except PaperWithdrawnError:
-            print(f"Paper {paper_id} is withdrawn.")
+            print(f"Paper {resolved_paper_id} is withdrawn.")
             paper['content_source'] = 'withdrawn'
             paper['summary_main_ideas'] = "This paper has been withdrawn by the authors."
             paper['full_text'] = ""
@@ -210,7 +335,7 @@ def analyze_paper(paper_id: str, force_update: bool = False) -> Dict[str, Any]:
             f"Abstract:\n{paper.get('abstract')}\n\n"
             f"Full Content:\n{full_text}"
         )
-        logger.info("emitting_paper_updated_for_rag", paper_id=paper_id)
+        logger.info("emitting_paper_updated_for_rag", paper_id=resolved_paper_id)
         emit(EventType.PAPER_ADDED, payload={"content": rag_content}, source="analyze_paper")
         
     return paper
@@ -272,11 +397,17 @@ class ResearchAssistant:
         import os
         
         if "arxiv.org" in target:
-            return add_paper_by_url(target)
+            result = paper_ingest(target)
+            if result.get("ok"):
+                return f"Ingested paper: {result.get('paper_id')}"
+            return f"Failed to ingest paper: {result.get('error', 'unknown error')}"
             
         if target.endswith(".pdf"):
             if os.path.exists(target):
-                return local_files_ops.import_pdf(target)
+                result = paper_ingest(target)
+                if result.get("ok"):
+                    return f"Ingested paper: {result.get('paper_id')}"
+                return f"Failed to ingest paper: {result.get('error', 'unknown error')}"
             return "File not found."
 
         if target.isdigit() or (len(target) < 20 and "." not in target and "/" not in target):

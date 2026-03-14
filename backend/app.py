@@ -1,5 +1,8 @@
 import json
 import sys
+import re
+import asyncio
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
@@ -27,11 +30,88 @@ from skills.knowledge.summarizer.summarize import generate_summary
 from skills.knowledge.db import manager
 from skills.preference.analyzer import update_preferences_from_query
 from skills.knowledge.graph_rag import initialize_rag
+from skills.knowledge.paper.id_utils import canonicalize_arxiv_id, resolve_paper_id
 from skills.preference.feedback import FeedbackEvent, process_feedback
 
 logger = get_api_logger()
 
 app = FastAPI(title="AI Paper Agent")
+ARXIV_ID_RE = re.compile(r"\b\d{4}\.\d{4,5}(?:v\d+)?\b", re.IGNORECASE)
+SKILL_LIST_INTENT_RE = re.compile(
+    r"(list|available|what).*skills?|skills?.*(list|available)|可用.*(技能|skill)|列出.*(技能|skill)",
+    re.IGNORECASE,
+)
+
+
+def _extract_arxiv_ids(text: str, limit: int = 3) -> List[str]:
+    if not text:
+        return []
+    ordered = []
+    seen = set()
+    for match in ARXIV_ID_RE.findall(text):
+        canonical = canonicalize_arxiv_id(match)
+        if not canonical or canonical in seen:
+            continue
+        seen.add(canonical)
+        ordered.append(canonical)
+        if len(ordered) >= limit:
+            break
+    return ordered
+
+
+async def _auto_ingest_papers_from_response(response_text: str) -> None:
+    try:
+        from skills.knowledge.paper import core as paper_core
+
+        for arxiv_id in _extract_arxiv_ids(response_text, limit=3):
+            paper = manager.get_paper(arxiv_id)
+            local_path = (paper or {}).get("full_text_local_path") if isinstance(paper, dict) else None
+            if local_path:
+                continue
+            await asyncio.to_thread(paper_core.paper_ingest, arxiv_id, force_update=False)
+    except Exception as exc:
+        logger.warning("auto_ingest_from_response_failed", error=str(exc))
+
+
+def _is_text_fallback_ingest_enabled() -> bool:
+    raw = os.environ.get("ENABLE_PAPER_TEXT_MENTION_FALLBACK", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _extract_skill_ingest_source(event: Dict[str, Any]) -> Optional[str]:
+    if event.get("type") != "tool-input-available":
+        return None
+    tool_name = str(event.get("toolName", "")).lower()
+    if "knowledge.paper_ingest" not in tool_name:
+        return None
+    payload = event.get("input")
+    if not isinstance(payload, dict):
+        return None
+    source = payload.get("source")
+    if isinstance(source, str) and source.strip():
+        return source.strip()
+    args = payload.get("arguments")
+    if isinstance(args, dict):
+        arg_source = args.get("source")
+        if isinstance(arg_source, str) and arg_source.strip():
+            return arg_source.strip()
+    return None
+
+
+async def _run_skill_triggered_ingest(sources: List[str]) -> None:
+    try:
+        from skills.knowledge.paper import core as paper_core
+
+        for source in sources:
+            await asyncio.to_thread(paper_core.paper_ingest, source, force_update=False)
+    except Exception as exc:
+        logger.warning("skill_triggered_ingest_failed", error=str(exc))
+
+
+def _is_skill_list_intent(text: str) -> bool:
+    if not text:
+        return False
+    return bool(SKILL_LIST_INTENT_RE.search(text))
 
 @app.get("/api/health")
 async def health():
@@ -70,11 +150,12 @@ class NoteLinkCreate(BaseModel):
 
 @app.get("/api/paper/{paper_id}")
 async def get_paper_details(paper_id: str):
-    paper = manager.get_paper(paper_id)
+    resolved_paper_id = resolve_paper_id(paper_id)
+    paper = manager.get_paper(resolved_paper_id)
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found")
     
-    full_text = manager.get_paper_full_text(paper_id)
+    full_text = manager.get_paper_full_text(resolved_paper_id)
     if full_text:
         paper['full_text'] = full_text
         
@@ -82,10 +163,11 @@ async def get_paper_details(paper_id: str):
 
 @app.post("/api/paper/{paper_id}/analyze")
 async def analyze_paper(paper_id: str, force_update: bool = False):
-    logger.info(f"API analyze_paper called for {paper_id} with force_update={force_update}")
+    resolved_paper_id = resolve_paper_id(paper_id)
+    logger.info(f"API analyze_paper called for {resolved_paper_id} with force_update={force_update}")
     try:
         from skills.knowledge.paper import core
-        return core.analyze_paper(paper_id, force_update=force_update)
+        return core.analyze_paper(resolved_paper_id, force_update=force_update)
     except ValueError as e:
         logger.error(f"ValueError in analyze_paper: {e}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -94,6 +176,24 @@ async def analyze_paper(paper_id: str, force_update: bool = False):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/paper/{paper_id}/fetch")
+async def fetch_paper(paper_id: str, force_update: bool = True):
+    """Deterministically fetch + ingest a paper into local storage and DB."""
+    resolved_paper_id = resolve_paper_id(paper_id)
+    try:
+        from skills.knowledge.paper import core as paper_core
+
+        result = paper_core.paper_ingest(resolved_paper_id, force_update=force_update)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result)
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("api_fetch_paper_failed", paper_id=resolved_paper_id, error=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc))
 
 @app.get("/api/notes")
 async def list_notes(
@@ -378,6 +478,42 @@ async def chat_endpoint(request: ChatRequest):
     # Save User Message
     manager.save_message(chat_id, "user", latest_query)
 
+    # Deterministic skill-list response: expose only project runtime skills.
+    if _is_skill_list_intent(latest_query):
+        import importlib
+
+        skill_mgmt = importlib.import_module("skills.skill-management.core")
+        skills = skill_mgmt.list_skills()
+        names = sorted({str(item.get("name", "")).strip() for item in skills if isinstance(item, dict)})
+        names = [name for name in names if name]
+        runtime_allowed_raw = os.environ.get("CODEX_RUNTIME_SKILLS", "knowledge,preference")
+        runtime_allowed = {n.strip() for n in runtime_allowed_raw.split(",") if n.strip()}
+        if runtime_allowed:
+            names = [name for name in names if name in runtime_allowed]
+        response_text = "\n".join(names) if names else "knowledge\npreference"
+        manager.save_message(chat_id, "assistant", response_text)
+
+        async def skill_stream():
+            yield f"data: {json.dumps({'type': 'start'})}\n\n"
+            yield f"data: {json.dumps({'type': 'start-step'})}\n\n"
+            yield f"data: {json.dumps({'type': 'text-start', 'id': 'text-1'})}\n\n"
+            yield f"data: {json.dumps({'type': 'text-delta', 'id': 'text-1', 'delta': response_text}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'text-end', 'id': 'text-1'})}\n\n"
+            yield f"data: {json.dumps({'type': 'finish-step'})}\n\n"
+            yield f"data: {json.dumps({'type': 'finish', 'finishReason': 'stop'})}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(
+            skill_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+                "x-vercel-ai-ui-message-stream": "v1",
+            },
+        )
+
     # Record the query and update preferences
     try:
         analysis = update_preferences_from_query(latest_query)
@@ -401,6 +537,7 @@ async def chat_endpoint(request: ChatRequest):
     # Use async generator for SDK streaming and persist assistant text deltas.
     async def async_stream_generator():
         full_response = ""
+        skill_ingest_sources: List[str] = []
         try:
             async for chunk in agent.chat_generator(
                 latest_query, 
@@ -421,6 +558,9 @@ async def chat_endpoint(request: ChatRequest):
                         data = json.loads(payload)
                         if not isinstance(data, dict):
                             continue
+                        skill_source = _extract_skill_ingest_source(data)
+                        if skill_source and skill_source not in skill_ingest_sources:
+                            skill_ingest_sources.append(skill_source)
                         if data.get("type") == "text-delta" and isinstance(data.get("delta"), str):
                             full_response += data["delta"]
                         elif data.get("type") == "content" and isinstance(data.get("content"), str):
@@ -443,6 +583,11 @@ async def chat_endpoint(request: ChatRequest):
                 manager.save_message(chat_id, "assistant", full_response)
             else:
                 logger.warning("chat_stream_empty_assistant_response", chat_id=chat_id)
+
+            if skill_ingest_sources:
+                await _run_skill_triggered_ingest(skill_ingest_sources)
+            elif full_response and _is_text_fallback_ingest_enabled():
+                await _auto_ingest_papers_from_response(full_response)
         # Signal stream completion for DefaultChatTransport parser.
         yield "data: [DONE]\n\n"
 
@@ -465,7 +610,7 @@ def list_papers(sort: str = "created_at_desc", source_id: int = None, source_typ
 
 @app.get("/api/papers/{paper_id}")
 def read_paper(paper_id: str):
-    p = manager.get_paper(paper_id)
+    p = manager.get_paper(resolve_paper_id(paper_id))
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
     return p

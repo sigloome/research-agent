@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, BookOpen, Calendar, StickyNote, Sparkles } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -33,27 +33,45 @@ interface Paper {
     summary_limitations?: string;
 }
 
+const canonicalizeArxivId = (raw?: string): string | null => {
+    const value = (raw || '').trim();
+    if (!value) return null;
+    const match = value.match(/^(\d{4}\.\d{4,5})(?:v\d+)?$/i);
+    if (match) return match[1];
+    return null;
+};
+
 export default function PaperDetail() {
     const { id } = useParams<{ id: string }>();
     const navigate = useNavigate();
+    const canonicalId = canonicalizeArxivId(id || '');
 
-    const { data: paper, error, mutate } = useSWR<Paper>(id ? `/api/paper/${id}` : null, fetcher);
+    useEffect(() => {
+        if (!id || !canonicalId || id === canonicalId) return;
+        navigate(`/paper/${canonicalId}`, { replace: true });
+    }, [id, canonicalId, navigate]);
+
+    const effectiveId = canonicalId || id;
+
+    const { data: paper, error, mutate } = useSWR<Paper>(effectiveId ? `/api/paper/${effectiveId}` : null, fetcher);
 
     // Notes state
     const [isNotesOpen, setIsNotesOpen] = useState(false);
-    const { data: notes, mutate: mutateNotes } = useSWR(id ? `/api/notes?paper_id=${id}` : null, fetcher);
+    const { data: notes, mutate: mutateNotes } = useSWR(effectiveId ? `/api/notes?paper_id=${effectiveId}` : null, fetcher);
     const [newNote, setNewNote] = useState('');
     const [isSaving, setIsSaving] = useState(false);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [isFetchingPaper, setIsFetchingPaper] = useState(false);
+    const [fetchError, setFetchError] = useState<string | null>(null);
 
     const handleSaveNote = async () => {
-        if (!newNote.trim() || !id) return;
+        if (!newNote.trim() || !effectiveId) return;
         setIsSaving(true);
         try {
             await fetch('/api/notes', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content: newNote, paper_id: id })
+                body: JSON.stringify({ content: newNote, paper_id: effectiveId })
             });
             setNewNote('');
             mutateNotes();
@@ -65,10 +83,10 @@ export default function PaperDetail() {
     };
 
     const handleAnalyze = async () => {
-        if (!id) return;
+        if (!effectiveId) return;
         setIsAnalyzing(true);
         try {
-            const res = await fetch(`/api/paper/${id}/analyze?force_update=true`, { method: 'POST' });
+            const res = await fetch(`/api/paper/${effectiveId}/analyze?force_update=true`, { method: 'POST' });
             if (res.ok) {
                 mutate(); // Refresh paper data
             }
@@ -82,11 +100,25 @@ export default function PaperDetail() {
     // Highlight snippet from URL hash
     // Implementation of precise citation highlighting will go here later
 
-    const handleRequestFetch = () => {
-        if (!id) return;
-        // Navigate to chat with a pre-filled message
-        // using the state to pass the message
-        navigate('/', { state: { initialMessage: `Fetch paper with ID ${id} from ArXiv` } });
+    const handleRequestFetch = async () => {
+        if (!effectiveId) return;
+        setIsFetchingPaper(true);
+        setFetchError(null);
+        try {
+            const res = await fetch(`/api/paper/${effectiveId}/fetch`, { method: 'POST' });
+            if (!res.ok) {
+                const payload = await res.json().catch(() => ({}));
+                throw new Error(payload?.detail?.error || payload?.detail || `fetch failed (${res.status})`);
+            }
+            // Re-open the same page so SWR performs a fresh query path.
+            window.location.assign(`/paper/${effectiveId}`);
+        } catch (e: any) {
+            setFetchError(e?.message || 'Fetch failed');
+            // Fallback to chat workflow if deterministic ingest fails.
+            navigate('/', { state: { initialMessage: `Fetch paper with ID ${effectiveId} from ArXiv` } });
+        } finally {
+            setIsFetchingPaper(false);
+        }
     };
 
     if (error) {
@@ -101,17 +133,21 @@ export default function PaperDetail() {
                         </div>
                         <h2 className="text-xl font-bold text-warmstone-900 mb-2">Paper Not in Library</h2>
                         <p className="text-warmstone-500 mb-6">
-                            This paper ({id}) hasn't been added to your local library yet.
+                            This paper ({effectiveId}) hasn't been added to your local library yet.
                         </p>
 
                         <div className="flex flex-col gap-3">
                             <button
                                 onClick={handleRequestFetch}
-                                className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                                disabled={isFetchingPaper}
+                                className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
                             >
                                 <Sparkles size={18} />
-                                Ask Agent to Fetch
+                                {isFetchingPaper ? 'Fetching...' : 'Ask Agent to Fetch'}
                             </button>
+                            {fetchError && (
+                                <p className="text-xs text-red-600">{fetchError}</p>
+                            )}
                             <button
                                 onClick={() => navigate('/')}
                                 className="w-full py-2.5 px-4 bg-white border border-warmstone-300 text-warmstone-700 font-medium rounded-lg hover:bg-warmstone-50 transition-colors"

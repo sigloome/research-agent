@@ -1,9 +1,10 @@
-import re
 import time
 from typing import Any, Dict, List, Optional
 
 import feedparser
 import requests
+
+from skills.knowledge.paper.id_utils import canonicalize_arxiv_id
 
 # Semantic Scholar API base
 S2_API_URL = "https://api.semanticscholar.org/graph/v1/paper"
@@ -111,9 +112,13 @@ def get_arxiv_paper_by_id(arxiv_id: str) -> Optional[Dict[str, Any]]:
     """
     Fetches a single paper by ArXiv ID.
     """
+    canonical_id = canonicalize_arxiv_id(arxiv_id)
+    if not canonical_id:
+        return None
+
     base_url = "http://export.arxiv.org/api/query"
     params = {
-        "id_list": arxiv_id
+        "id_list": canonical_id
     }
     
     try:
@@ -151,12 +156,11 @@ def fetch_from_url(url: str) -> Optional[Dict[str, Any]]:
     """
     Parses ArXiv URL and fetches paper data.
     """
-    match = re.search(r'arxiv\.org/(?:abs|pdf|html)/(\d+\.\d+)', url)
-    if not match:
+    arxiv_id = canonicalize_arxiv_id(url)
+    if not arxiv_id:
         print(f"Could not parse ArXiv ID from {url}")
         return None
-        
-    arxiv_id = match.group(1)
+
     print(f"Detected ArXiv ID: {arxiv_id}")
     
     paper = get_arxiv_paper_by_id(arxiv_id)

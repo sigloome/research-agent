@@ -20,9 +20,11 @@ Customized-agent/custom-prompt paths currently in scope:
 | `A1` | `/Users/bytedance/code/anti-demo/backend/agent.py` main system prompt and tool policy | Active |
 | `A2` | `/Users/bytedance/code/anti-demo/frontend/src/components/ChatInterface.tsx` local-first injected hint | Active |
 | `A3` | `/Users/bytedance/code/anti-demo/skills/preference/sync.py` preference summary mini-agent | Active (background) |
-| `A4` | `/Users/bytedance/code/anti-demo/skills/knowledge/summarizer/summarize.py` ingestion summarizer prompt | Active |
+| `A4` | `/Users/bytedance/code/anti-demo/skills/knowledge/summarizer/summarize.py` ingestion summarizer prompt (Codex-native adapter) | Active |
 | `A5` | `/Users/bytedance/code/anti-demo/skills/knowledge/rag_critic/critic.py` critic prompt | Implemented, not in default `/api/chat` path |
 | `A6` | `/Users/bytedance/code/anti-demo/skills/knowledge/bridge.py` and `/Users/bytedance/code/anti-demo/skills/knowledge/graph_rag/implementation.py` | Partially active |
+| `A7` | `/Users/bytedance/code/anti-demo/backend/codex_sdk_runtime.py` and `/Users/bytedance/code/anti-demo/skills/knowledge/paper/core.py` codex-native tool routing + ingest contract | Active |
+| `A8` | `/Users/bytedance/code/anti-demo/backend/app.py` skill-event ingest trigger (`knowledge.paper_ingest`) and fallback gate | Active |
 
 Any new path that contains custom prompt behavior must be added to this table before merge.
 
@@ -159,6 +161,9 @@ Required evals:
 2. `AGT-05` strict JSON schema contract.
 3. `AGT-06` planted fact-slot recall.
 4. `AGT-10` malformed model-output fallback behavior.
+5. `AGT-23` Codex summarizer adapter contract:
+   - success path returns required keys
+   - adapter failure returns deterministic fallback object.
 
 Required deterministic methods:
 
@@ -193,6 +198,39 @@ Required deterministic methods:
 
 1. Controlled exception injection.
 2. Return-type and error-message contract checks.
+
+### A7: Codex-native tool routing and paper ingest contract
+
+Required evals:
+
+1. `AGT-17` codex-native tool-event mapping contract:
+   - `item.started|completed` for native tool/MCP calls must map to UI stream `tool-input-*` / `tool-output-*`.
+2. `AGT-18` paper ingest durability contract:
+   - success requires local persistence path + required key summary fields in DB.
+3. `AGT-19` local retrieval integrity after ingest:
+   - ingested paper discoverable through local retrieval path without external fallback.
+
+Required deterministic methods:
+
+1. Fixture replay for codex JSONL native tool events and parser assertions.
+2. DB-state assertions for ingest success/failure envelopes.
+3. Retrieval assertions on deterministic ingest fixtures.
+
+### A8: Skill-triggered ingest gate in `/api/chat`
+
+Required evals:
+
+1. `AGT-20` skill-triggered ingest extraction:
+   - `tool-input-available` with `knowledge.paper_ingest` must extract source and trigger ingest path.
+2. `AGT-21` fallback gate default-off:
+   - plain text mention of arXiv id must not trigger ingest when fallback env is unset.
+3. `AGT-22` explicit fallback override:
+   - fallback path only activates when `ENABLE_PAPER_TEXT_MENTION_FALLBACK=true`.
+
+Required deterministic methods:
+
+1. BDD stream fixture tests over `/api/chat` with tool-event/text-only variants.
+2. Helper-level unit tests for source extraction and fallback env parsing.
 
 ### Supplementary runtime guardrails (repository-required)
 

@@ -67,13 +67,36 @@ FRONTEND_PID=$!
 cd ..
 
 echo "Running listener sanity check..."
-if ! BACKEND_PORT="$BACKEND_PORT" FRONTEND_PORT="$FRONTEND_PORT" scripts/check_dev_listener_sanity.sh; then
-  echo "Listener sanity failed right after startup; stopping services."
+# Uvicorn with --reload can take a few seconds to fully spawn workers.
+MAX_WAIT_SECONDS="${DEV_LISTENER_MAX_WAIT_SECONDS:-15}"
+SANITY_OK=0
+for ((i=1; i<=MAX_WAIT_SECONDS; i++)); do
+  if BACKEND_PORT="$BACKEND_PORT" \
+     FRONTEND_PORT="$FRONTEND_PORT" \
+     BACKEND_MAX_LISTENERS=2 \
+     FRONTEND_MAX_LISTENERS=1 \
+     scripts/check_dev_listener_sanity.sh >/dev/null 2>&1; then
+    SANITY_OK=1
+    break
+  fi
+  sleep 1
+done
+
+if [[ "$SANITY_OK" -ne 1 ]]; then
+  echo "Listener sanity failed after ${MAX_WAIT_SECONDS}s; details:"
+  BACKEND_PORT="$BACKEND_PORT" \
+  FRONTEND_PORT="$FRONTEND_PORT" \
+  BACKEND_MAX_LISTENERS=2 \
+  FRONTEND_MAX_LISTENERS=1 \
+  scripts/check_dev_listener_sanity.sh || true
+  echo "Stopping services."
   kill "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null || true
   cleanup_listeners "$BACKEND_PORT"
   cleanup_listeners "$FRONTEND_PORT"
   exit 1
 fi
+
+echo "[ok] listener sanity passed (:${BACKEND_PORT}, :${FRONTEND_PORT})"
 
 echo "Backend PID: $BACKEND_PID"
 echo "Frontend PID: $FRONTEND_PID"

@@ -7,7 +7,8 @@ from skills.knowledge.paper.core import (
     fetch_papers,
     add_paper_by_url,
     analyze_paper,
-    search_local_papers
+    search_local_papers,
+    paper_ingest,
 )
 
 # Configure logging
@@ -33,6 +34,11 @@ def main():
     # Command: search (Local)
     search_parser = subparsers.add_parser("search", help="Search local papers")
     search_parser.add_argument("query", help="Search query")
+
+    # Command: ingest (contract path)
+    ingest_parser = subparsers.add_parser("ingest", help="Ingest paper from arXiv id/url or local PDF")
+    ingest_parser.add_argument("source", help="arXiv id/url or local pdf path")
+    ingest_parser.add_argument("--force-update", action="store_true", help="Force re-download/re-analysis")
 
     args = parser.parse_args()
 
@@ -64,6 +70,10 @@ def main():
         print(f"Found {len(papers)} matches:")
         for p in papers:
             print(f"  - {p.get('title', 'No Title')}")
+
+    elif args.command == "ingest":
+        result = paper_ingest(args.source, force_update=args.force_update)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
 
     else:
         parser.print_help()

@@ -3,6 +3,8 @@ set -euo pipefail
 
 BACKEND_PORT="${BACKEND_PORT:-18000}"
 FRONTEND_PORT="${FRONTEND_PORT:-18001}"
+BACKEND_MAX_LISTENERS="${BACKEND_MAX_LISTENERS:-1}"
+FRONTEND_MAX_LISTENERS="${FRONTEND_MAX_LISTENERS:-1}"
 
 count_listeners() {
   local port="$1"
@@ -20,13 +22,13 @@ if [[ "$frontend_count" -eq 0 ]]; then
   echo "[error] frontend is not listening on :$FRONTEND_PORT"
   exit 1
 fi
-if [[ "$backend_count" -gt 1 ]]; then
-  echo "[error] multiple backend listeners detected on :$BACKEND_PORT (count=$backend_count)"
+if [[ "$backend_count" -gt "$BACKEND_MAX_LISTENERS" ]]; then
+  echo "[error] too many backend listeners on :$BACKEND_PORT (count=$backend_count, max=$BACKEND_MAX_LISTENERS)"
   lsof -nP -iTCP:"$BACKEND_PORT" -sTCP:LISTEN || true
   exit 1
 fi
-if [[ "$frontend_count" -gt 1 ]]; then
-  echo "[error] multiple frontend listeners detected on :$FRONTEND_PORT (count=$frontend_count)"
+if [[ "$frontend_count" -gt "$FRONTEND_MAX_LISTENERS" ]]; then
+  echo "[error] too many frontend listeners on :$FRONTEND_PORT (count=$frontend_count, max=$FRONTEND_MAX_LISTENERS)"
   lsof -nP -iTCP:"$FRONTEND_PORT" -sTCP:LISTEN || true
   exit 1
 fi

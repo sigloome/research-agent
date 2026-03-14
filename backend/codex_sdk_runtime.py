@@ -19,79 +19,233 @@ def _parse_json_line(line: str) -> Optional[Dict[str, Any]]:
     return obj if isinstance(obj, dict) else None
 
 
-def codex_jsonl_to_ui_events(lines: Iterable[str], return_code: int) -> List[Dict[str, Any]]:
-    """Convert codex JSONL + diagnostics to UI-message event payloads.
+class _CodexUiEventMapper:
+    """Stateful codex-event -> UI-event mapper for incremental streaming."""
 
-    This helper is deterministic and used by tests to validate parser behavior.
-    """
-    events: List[Dict[str, Any]] = []
-    started = False
-    emitted_error = False
-    diagnostics: List[str] = []
-    usage: Dict[str, Any] = {}
-    text_part_id = "text-1"
+    def __init__(self, *, text_part_id: str = "text-1") -> None:
+        self.text_part_id = text_part_id
+        self.started = False
+        self.emitted_error = False
+        self.diagnostics: List[str] = []
+        self.usage: Dict[str, Any] = {}
+        self.observed_native_tool = False
+        self.agent_message_text: Dict[str, str] = {}
 
-    def start_if_needed() -> None:
-        nonlocal started
-        if started:
+    def _start_if_needed(self, out: List[Dict[str, Any]]) -> None:
+        if self.started:
             return
-        started = True
-        events.append({"type": "start"})
-        events.append({"type": "start-step"})
-        events.append({"type": "text-start", "id": text_part_id})
+        self.started = True
+        out.append({"type": "start"})
+        out.append({"type": "start-step"})
+        out.append({"type": "text-start", "id": self.text_part_id})
 
-    for raw in lines:
+    def _emit_agent_text_delta(self, item: Dict[str, Any], out: List[Dict[str, Any]]) -> None:
+        text = item.get("text")
+        if not isinstance(text, str) or not text:
+            return
+        msg_id = str(item.get("id") or "agent-message")
+        prev = self.agent_message_text.get(msg_id, "")
+        if prev == text:
+            return
+        delta = text[len(prev):] if text.startswith(prev) else text
+        if not delta:
+            return
+        self._start_if_needed(out)
+        out.append({"type": "text-delta", "id": self.text_part_id, "delta": delta})
+        self.agent_message_text[msg_id] = text
+
+    def feed_line(self, raw: str) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
         event = _parse_json_line(raw)
         if event is None:
             stripped = (raw or "").strip()
             if stripped:
-                diagnostics.append(stripped)
-                if len(diagnostics) > 5:
-                    diagnostics.pop(0)
-            continue
+                self.diagnostics.append(stripped)
+                if len(self.diagnostics) > 5:
+                    self.diagnostics.pop(0)
+            return out
 
         evt_type = str(event.get("type", ""))
         if evt_type in {"thread.started", "turn.started"}:
-            start_if_needed()
-            continue
+            self._start_if_needed(out)
+            return out
 
-        if evt_type == "item.completed":
+        if evt_type in {"response.output_text.delta", "output_text.delta"}:
+            delta = event.get("delta")
+            if isinstance(delta, str) and delta:
+                self._start_if_needed(out)
+                out.append({"type": "text-delta", "id": self.text_part_id, "delta": delta})
+            return out
+
+        if evt_type in {"item.started", "item.updated", "item.completed"}:
             item = event.get("item", {})
+            if isinstance(item, dict) and item.get("type") == "mcp_tool_call":
+                self.observed_native_tool = True
+                call_id = str(item.get("id") or "mcp-call")
+                server = str(item.get("server") or "mcp")
+                tool = str(item.get("tool") or "tool")
+                args = item.get("arguments", {})
+                if evt_type == "item.started":
+                    self._start_if_needed(out)
+                    out.append(
+                        {"type": "tool-input-start", "toolCallId": call_id, "toolName": f"{server}.{tool}"}
+                    )
+                    out.append(
+                        {
+                            "type": "tool-input-available",
+                            "toolCallId": call_id,
+                            "toolName": f"{server}.{tool}",
+                            "input": args if isinstance(args, dict) else {"raw": args},
+                        }
+                    )
+                    return out
+                if evt_type == "item.completed":
+                    self._start_if_needed(out)
+                    output: Any = item.get("result")
+                    if output is None and isinstance(item.get("error"), dict):
+                        output = {"error": item["error"].get("message", "mcp tool failed")}
+                    if output is None:
+                        output = {"status": str(item.get("status", "completed"))}
+                    out.append(
+                        {
+                            "type": "tool-output-available",
+                            "toolCallId": call_id,
+                            "output": output,
+                        }
+                    )
+                    return out
+
             if isinstance(item, dict) and item.get("type") == "agent_message":
-                text = str(item.get("text", ""))
-                if text:
-                    start_if_needed()
-                    events.append({"type": "text-delta", "id": text_part_id, "delta": text})
-            continue
+                self._emit_agent_text_delta(item, out)
+            return out
 
         if evt_type == "turn.completed":
             turn_usage = event.get("usage")
             if isinstance(turn_usage, dict):
-                usage = turn_usage
-            continue
+                self.usage = turn_usage
+            return out
 
-        if evt_type in {"error", "turn.failed"} and not emitted_error:
-            start_if_needed()
+        if evt_type in {"error", "turn.failed"} and not self.emitted_error:
+            self._start_if_needed(out)
             msg = event.get("message")
             if not isinstance(msg, str) and isinstance(event.get("error"), dict):
                 msg = str(event["error"].get("message", "unknown error"))
-            events.append({"type": "error", "errorText": msg or "codex error"})
-            emitted_error = True
+            out.append({"type": "error", "errorText": msg or "codex error"})
+            self.emitted_error = True
+        return out
 
-    start_if_needed()
-    if return_code != 0 and not emitted_error:
-        details = "; ".join(diagnostics[-3:]) if diagnostics else "codex exited non-zero"
-        events.append({"type": "error", "errorText": details})
-    events.append({"type": "text-end", "id": text_part_id})
-    events.append({"type": "finish-step"})
-    if return_code == 0 and usage:
-        events.append({"type": "data-metrics", "data": usage})
-        events.append({"type": "finish", "finishReason": "stop"})
-    elif return_code == 0:
-        events.append({"type": "finish", "finishReason": "stop"})
-    else:
-        events.append({"type": "finish", "finishReason": "error"})
+    def finalize(self, return_code: int) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        self._start_if_needed(out)
+        if return_code != 0 and not self.emitted_error:
+            details = "; ".join(self.diagnostics[-3:]) if self.diagnostics else "codex exited non-zero"
+            out.append({"type": "error", "errorText": details})
+        if self.observed_native_tool:
+            out.append({"type": "data-native-tooling", "data": {"observed": True}})
+        out.append({"type": "text-end", "id": self.text_part_id})
+        out.append({"type": "finish-step"})
+        if return_code == 0 and self.usage:
+            out.append({"type": "data-metrics", "data": self.usage})
+            out.append({"type": "finish", "finishReason": "stop"})
+        elif return_code == 0:
+            out.append({"type": "finish", "finishReason": "stop"})
+        else:
+            out.append({"type": "finish", "finishReason": "error"})
+        return out
+
+
+def codex_jsonl_to_ui_events(lines: Iterable[str], return_code: int) -> List[Dict[str, Any]]:
+    """Convert codex JSONL + diagnostics to UI-message event payloads."""
+    mapper = _CodexUiEventMapper()
+    events: List[Dict[str, Any]] = []
+    for raw in lines:
+        events.extend(mapper.feed_line(raw))
+    events.extend(mapper.finalize(return_code))
     return events
+
+
+def _default_runtime_config_toml() -> str:
+    return (
+        'approval_policy = "never"\n'
+        'web_search = "live"\n'
+        'model_reasoning_effort = "medium"\n'
+        "\n"
+        "[sandbox_workspace_write]\n"
+        "network_access = true\n"
+    )
+
+
+def _ensure_runtime_skill_home(cwd: Path) -> Path:
+    runtime_home = cwd / ".codex-agent-runtime"
+    skills_home = runtime_home / "skills"
+    runtime_home.mkdir(parents=True, exist_ok=True)
+    skills_home.mkdir(parents=True, exist_ok=True)
+
+    raw_names = os.environ.get("CODEX_RUNTIME_SKILLS", "knowledge,preference")
+    desired = {name.strip() for name in raw_names.split(",") if name.strip()}
+    if not desired:
+        desired = {"knowledge", "preference"}
+
+    # Keep runtime skills deterministic and isolated from developer Codex homes.
+    for existing in skills_home.iterdir():
+        if existing.name not in desired:
+            if existing.is_symlink() or existing.is_file():
+                existing.unlink(missing_ok=True)
+            elif existing.is_dir():
+                shutil.rmtree(existing, ignore_errors=True)
+
+    for name in sorted(desired):
+        source = cwd / "skills" / name
+        target = skills_home / name
+        if not source.exists():
+            continue
+        if target.exists() or target.is_symlink():
+            if target.is_symlink() and target.resolve() == source.resolve():
+                continue
+            if target.is_symlink() or target.is_file():
+                target.unlink(missing_ok=True)
+            else:
+                shutil.rmtree(target, ignore_errors=True)
+        try:
+            target.symlink_to(source, target_is_directory=True)
+        except OSError:
+            shutil.copytree(source, target)
+
+    config_path = runtime_home / "config.toml"
+    config_text = os.environ.get("CODEX_RUNTIME_CONFIG_TOML", "").strip() or _default_runtime_config_toml()
+    config_path.write_text(config_text, encoding="utf-8")
+
+    # Preserve Codex auth/account state while keeping runtime skills isolated.
+    source_codex_home = Path(
+        os.environ.get("CODEX_SOURCE_HOME", "").strip()
+        or os.environ.get("CODEX_HOME", "").strip()
+        or (Path.home() / ".codex")
+    )
+    for name in ("auth.json", "config.toml.account.toml"):
+        src = source_codex_home / name
+        dst = runtime_home / name
+        if src.exists() and not dst.exists():
+            try:
+                shutil.copy2(src, dst)
+            except OSError:
+                pass
+    return runtime_home
+
+
+def _build_codex_runtime_env(cwd: Path, runtime_home: Optional[Path] = None) -> Dict[str, str]:
+    runtime_home = runtime_home or _ensure_runtime_skill_home(cwd)
+    env = dict(os.environ)
+    # Keep original HOME so system credential helpers continue to work.
+    if "HOME" in os.environ:
+        env["HOME"] = os.environ["HOME"]
+    env["CODEX_HOME"] = str(runtime_home)
+    existing_pythonpath = env.get("PYTHONPATH", "").strip()
+    env["PYTHONPATH"] = (
+        str(cwd)
+        if not existing_pythonpath
+        else f"{cwd}{os.pathsep}{existing_pythonpath}"
+    )
+    return env
 
 
 async def stream_codex_sdk(
@@ -132,13 +286,26 @@ async def stream_codex_sdk(
         or os.environ.get("CODEX_EXEC_MODEL", "").strip()
         or codex_model
     )
+    runtime_home = _ensure_runtime_skill_home(cwd)
+    runtime_workspace = runtime_home / "workspace"
+    runtime_workspace.mkdir(parents=True, exist_ok=True)
+
     payload = {
         "input": query,
         "model": effective_model,
-        "workingDirectory": str(cwd),
+        "workingDirectory": str(runtime_workspace),
         "skipGitRepoCheck": True,
         "networkAccessEnabled": True,
+        "codexEnv": _build_codex_runtime_env(cwd, runtime_home),
     }
+    config_overrides_raw = os.environ.get("CODEX_CONFIG_OVERRIDES_JSON", "").strip()
+    if config_overrides_raw:
+        try:
+            parsed = json.loads(config_overrides_raw)
+            if isinstance(parsed, dict):
+                payload["configOverrides"] = parsed
+        except json.JSONDecodeError:
+            pass
     # The current @openai/codex-sdk thread options do not expose profile selection directly.
     if profile:
         payload["profile_note"] = profile
@@ -157,15 +324,17 @@ async def stream_codex_sdk(
         await proc.stdin.drain()
         proc.stdin.close()
 
-    lines: List[str] = []
+    mapper = _CodexUiEventMapper()
     while True:
         if proc.stdout is None:
             break
         raw = await proc.stdout.readline()
         if not raw:
             break
-        lines.append(raw.decode("utf-8", errors="replace").rstrip("\n"))
+        line = raw.decode("utf-8", errors="replace").rstrip("\n")
+        for event in mapper.feed_line(line):
+            yield format_chunk(event)
 
     rc = await proc.wait()
-    for payload in codex_jsonl_to_ui_events(lines, return_code=rc):
-        yield format_chunk(payload)
+    for event in mapper.finalize(return_code=rc):
+        yield format_chunk(event)

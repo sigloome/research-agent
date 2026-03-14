@@ -39,8 +39,20 @@ async function main() {
     if (typeof payload.networkAccessEnabled === "boolean") {
       options.networkAccessEnabled = payload.networkAccessEnabled;
     }
+    if (Array.isArray(payload.additionalDirectories)) {
+      options.additionalDirectories = payload.additionalDirectories.filter(
+        (entry) => typeof entry === "string" && entry.trim().length > 0,
+      );
+    }
 
-    const codex = new Codex();
+    const codexOptions = {};
+    if (payload.codexEnv && typeof payload.codexEnv === "object") {
+      codexOptions.env = payload.codexEnv;
+    }
+    if (payload.configOverrides && typeof payload.configOverrides === "object") {
+      codexOptions.config = payload.configOverrides;
+    }
+    const codex = new Codex(codexOptions);
     const thread = codex.startThread(options);
     const { events } = await thread.runStreamed(input);
 

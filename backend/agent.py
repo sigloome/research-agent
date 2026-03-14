@@ -410,12 +410,15 @@ class MainAgent:
         conversation_history: Optional[List[Dict[str, str]]],
         runtime_profile: Optional[RuntimeProfile],
     ):
-        _ = user_preferences
-        _ = conversation_history
+        full_query = self._build_full_query(
+            query=query,
+            user_preferences=user_preferences,
+            conversation_history=conversation_history,
+        )
         _ = runtime_profile
         async for chunk in stream_codex_sdk(
             format_chunk=self._format_chunk,
-            query=query,
+            query=full_query,
             cwd=self.cwd,
             codex_model=self.codex_model,
         ):
@@ -475,14 +478,6 @@ class MainAgent:
         conversation_history: Optional[List[Dict[str, str]]],
     ) -> str:
         full_query = query
-        if self._should_enforce_skill_routing(query):
-            full_query = (
-                "[MANDATORY TOOL ROUTING]\n"
-                "1) Call Skill tool to enumerate available skills before final answer.\n"
-                "2) Prefer knowledge/preference skills for local/project queries.\n"
-                "3) If those skills are unavailable, explicitly state that in output.\n\n"
-                f"User request: {query}"
-            )
 
         if conversation_history and len(conversation_history) > 0:
             history_context = "\n\n[Prior Conversation History - Please continue this conversation]\n"
@@ -616,6 +611,21 @@ class MainAgent:
 
         if skill_name == "knowledge":
             from skills.knowledge.db import manager
+            from skills.knowledge.paper import core as paper_core
+
+            op = str(args.get("op") or args.get("action") or "").strip().lower()
+            source = str(args.get("source") or query or "").strip()
+            if op in {"paper_ingest", "ingest"}:
+                ingest = paper_core.paper_ingest(
+                    source=source,
+                    force_update=bool(args.get("force_update", False)),
+                )
+                return {
+                    "skill": "knowledge",
+                    "op": "paper_ingest",
+                    "source": source,
+                    "result": ingest,
+                }
 
             if query:
                 papers = manager.search_local_papers(query)

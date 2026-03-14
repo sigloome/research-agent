@@ -4,6 +4,7 @@ Provides functions to list, search, read, and update skills.
 """
 
 import importlib
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -12,11 +13,19 @@ from typing import Any, Dict, List
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 SKILLS_DIR = PROJECT_ROOT / "skills"
-SKILL_MD_ROOTS = (
-    PROJECT_ROOT / "skills",
-    PROJECT_ROOT / ".codex" / "skills",
-    PROJECT_ROOT / ".claude" / "skills",
-)
+
+
+def _skill_md_roots() -> List[Path]:
+    roots: List[Path] = [PROJECT_ROOT / "skills"]
+    include_dev = str(os.environ.get("SKILL_MANAGEMENT_INCLUDE_DEV", "")).lower()
+    if include_dev in {"1", "true", "yes", "on"}:
+        roots.extend(
+            [
+                PROJECT_ROOT / ".codex" / "skills",
+                PROJECT_ROOT / ".claude" / "skills",
+            ]
+        )
+    return roots
 
 
 def list_skills() -> List[Dict[str, Any]]:
@@ -27,7 +36,7 @@ def list_skills() -> List[Dict[str, Any]]:
     skills = []
 
     seen_paths = set()
-    for root in SKILL_MD_ROOTS:
+    for root in _skill_md_roots():
         if not root.exists():
             continue
         for skill_dir in root.iterdir():

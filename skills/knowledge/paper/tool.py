@@ -41,3 +41,11 @@ def analyze_paper(paper_id: str) -> Dict[str, Any]:
     Use this when you need deep understanding of a specific paper.
     """
     return core.analyze_paper(paper_id)
+
+
+def paper_ingest(source: str, force_update: bool = False) -> Dict[str, Any]:
+    """
+    Ingest a paper from arXiv URL/ID or local PDF path.
+    Success requires local persistence and key summary fields.
+    """
+    return core.paper_ingest(source, force_update=force_update)

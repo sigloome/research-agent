@@ -232,6 +232,56 @@ A feature is complete only if all are true:
 4. **Phase 3: Expanded Autonomy**
    - Broader scope only after stable metrics and review quality.
 
+## Feature Rationale Record: Codex-Native Skill Routing + Paper Ingest
+
+### Why this feature
+
+1. Active `/api/chat` runtime is `codex_sdk`, so skill execution must use codex-native capabilities to avoid policy/runtime divergence.
+2. Paper workflows require durable local persistence plus key-info DB extraction for stable follow-up retrieval.
+
+### Expected project benefit
+
+1. Higher local-first answer quality for research/paper queries.
+2. Better observability via tool timeline events in stream.
+3. Lower hidden failure rate where paper data appears indexed but is not durably ingested.
+
+### Numeric success metrics
+
+1. `codex_native_skill_invocation_rate >= 95%` for skill-routed deterministic fixtures.
+2. `paper_ingest_success_rate >= 98%` over rolling 100-ingest window.
+3. `paper_key_info_schema_pass_rate >= 99%`.
+4. `local_retrieval_hit_at_5 >= 85%` on ingest fixtures.
+
+### Rollback / kill criteria
+
+1. If tool-event contract tests fail in 2 consecutive deterministic runs: disable codex-native routing feature flag and rollback runtime parser changes.
+2. If ingest failure rate exceeds 2% for 2 consecutive windows: disable ingest contract path and rollback to previous stable ingest behavior.
+3. If `/api/chat` error-finish rate increases by more than 2% over baseline window: pause rollout and rollback latest runtime changes.
+
+## Feature Rationale Record: Skill-Triggered Paper Auto-Ingest (Fallback Default-Off)
+
+### Why this feature
+
+1. Text-mention fallback (`assistant` output contains arXiv id) can create false-positive ingest writes.
+2. Skill event is the authoritative runtime signal; default behavior should follow explicit tool invocation.
+
+### Expected project benefit
+
+1. Lower accidental paper ingest writes.
+2. Clearer observability and deterministic debugging path (`tool-input-available` -> ingest).
+3. Stronger regression detection through BDD/TDD.
+
+### Numeric success metrics
+
+1. `fallback_ingest_default_invocations = 0`.
+2. `skill_triggered_ingest_invocation_rate = 100%` on BDD fixtures.
+3. `bdd_tdd_pass_rate = 100%` for AGT-20/21/22 test set.
+
+### Rollback / kill criteria
+
+1. If skill-triggered ingest extraction tests fail in 2 consecutive runs, rollback to previous stable `/api/chat` ingest trigger logic.
+2. If production trigger rate drops below 95% due to runtime event drift, temporarily enable `ENABLE_PAPER_TEXT_MENTION_FALLBACK=true` and open follow-up fix change.
+
 ## Source References
 
 This specification is aligned with:
