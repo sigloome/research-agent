@@ -1,16 +1,25 @@
 #!/bin/sh
 set -e
 
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN="python3"
+elif command -v python >/dev/null 2>&1; then
+  PYTHON_BIN="python"
+else
+  echo "Error: python interpreter not found (need python3 or python)." >&2
+  exit 1
+fi
+
 echo "Running local OpenSpec proposal checks..."
-python scripts/check_openspec_proposals.py --changed
+"$PYTHON_BIN" scripts/check_openspec_proposals.py --changed
 
 echo "Running local OpenSpec tasks checks..."
-python scripts/check_openspec_tasks.py --changed
+"$PYTHON_BIN" scripts/check_openspec_tasks.py --changed
 
 echo "Running local OpenSpec design checks..."
-python scripts/check_openspec_design.py --changed
+"$PYTHON_BIN" scripts/check_openspec_design.py --changed
 
 echo "Running local OpenSpec retention checks..."
-python scripts/check_openspec_retention.py --changed --require-local-ref
+"$PYTHON_BIN" scripts/check_openspec_retention.py --changed --require-local-ref
 
 echo "pre-commit checks passed."
