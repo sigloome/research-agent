@@ -3,6 +3,9 @@ name: deterministic-agent-checks
 on:
   push:
   pull_request:
+  schedule:
+    - cron: "0 3 * * *"
+    - cron: "0 4 * * 1"
 
 jobs:
   deterministic-agent-checks:
@@ -36,3 +39,14 @@ jobs:
 
       - name: Run deterministic retrieval eval tests
         run: pytest -q evals/tests/test_retrieval_prompt_paths.py evals/tests/test_retrieval_prompt_paths_audit.py
+
+      - name: Validate frozen paper_core benchmark plan
+        run: python -m evals.runners.run_suite --suite paper_core --params-signature baseline --git-commit "${GITHUB_SHA}"
+
+      - name: Validate frozen paper_full benchmark plan on nightly
+        if: github.event_name == 'schedule' && github.event.schedule == '0 3 * * *'
+        run: python -m evals.runners.run_suite --suite paper_full --params-signature baseline --git-commit "${GITHUB_SHA}"
+
+      - name: Validate frozen paper_audit benchmark plan on weekly
+        if: github.event_name == 'schedule' && github.event.schedule == '0 4 * * 1'
+        run: python -m evals.runners.run_suite --suite paper_audit --params-signature baseline --git-commit "${GITHUB_SHA}"

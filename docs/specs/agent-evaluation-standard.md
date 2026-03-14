@@ -25,6 +25,7 @@ Customized-agent/custom-prompt paths currently in scope:
 | `A6` | `/Users/bytedance/code/anti-demo/skills/knowledge/bridge.py` and `/Users/bytedance/code/anti-demo/skills/knowledge/graph_rag/implementation.py` | Partially active |
 | `A7` | `/Users/bytedance/code/anti-demo/backend/codex_sdk_runtime.py` and `/Users/bytedance/code/anti-demo/skills/knowledge/paper/core.py` codex-native tool routing + ingest contract | Active |
 | `A8` | `/Users/bytedance/code/anti-demo/backend/app.py` skill-event ingest trigger (`knowledge.paper_ingest`) and fallback gate | Active |
+| `A9` | `/Users/bytedance/code/anti-demo/backend/multi_agent_runtime.py` and `/Users/bytedance/code/anti-demo/evals/runners/run_suite.py` paper retrieval runtime context + frozen benchmark planning | Active |
 
 Any new path that contains custom prompt behavior must be added to this table before merge.
 
@@ -252,6 +253,29 @@ Required deterministic methods:
 1. Deterministic stream-fixture replay with pass/fail invariants.
 2. Deterministic DB-state assertions under concurrent request fixtures.
 
+### A9: Paper retrieval runtime context and frozen benchmark planning
+
+Required evals:
+
+1. `PBR-01` active runtime profile honored:
+   - active `_run_codex_sdk` path must inject structured retrieval context when `runtime_profile` is provided.
+2. `PBR-02` structured retrieval context schema:
+   - retrieval context must include `profile`, `intent`, `candidate_papers`, `evidence_items`, and `coverage_audit`.
+3. `PBR-03` frozen benchmark signature completeness:
+   - blocking paper benchmark tiers must emit `dataset_version`, `dataset_hash`, `snapshot_id`, `seed`, `params_signature`, and `git_commit`.
+4. `PBR-04` tier budget gate behavior:
+   - `core` and `full` over-budget runs fail; `audit` over-budget runs warn only.
+5. `PBR-05` snapshot restore precondition:
+   - blocking paper benchmark tiers fail before execution if the configured snapshot is missing.
+6. `PBR-06` repeat-run stability calculation:
+   - identical-signature runs must report variance for key retrieval metrics.
+
+Required deterministic methods:
+
+1. Runtime contract tests over the active `_run_codex_sdk` path.
+2. Deterministic metric tests for paper recall, cluster coverage, comparison facet coverage, support/contradict recall, and repeat-run stability.
+3. Runner contract tests for frozen manifest loading, snapshot precondition enforcement, signature construction, and budget policy.
+
 ## Required Metrics and Oracles
 
 Each path suite must use deterministic metrics from this set:
@@ -265,6 +289,13 @@ Each path suite must use deterministic metrics from this set:
 7. `latency_cost`
 8. `content_filter_contract` (for `AGT-15`)
 9. `orchestration_contract` (for `AGT-16`)
+10. `paper_benchmark_signature`
+11. `paper_benchmark_budget`
+12. `paper_recall`
+13. `cluster_coverage`
+14. `comparison_facet_coverage`
+15. `support_contradict_recall`
+16. `repeat_run_stability`
 
 If adding a new metric:
 
@@ -277,10 +308,35 @@ If adding a new metric:
 1. PR gate:
    - run deterministic only.
    - includes mandatory path tests except optional weekly-audit tests.
+   - includes frozen `paper_core` benchmark planning/contract validation.
 2. Nightly:
    - deterministic full path suite with `k=3` trials on flaky-prone tasks.
+   - includes frozen `paper_full` benchmark planning/contract validation.
 3. Weekly audit:
    - sampled runtime LLM judge tasks (<=15%) for open-ended quality monitoring.
+   - includes frozen `paper_audit` benchmark planning/contract validation as non-blocking.
+
+## Paper Benchmark Governance (Repository-Required)
+
+Blocking paper benchmark tiers MUST follow these rules:
+
+1. Use versioned frozen datasets only.
+2. Restore a fixed snapshot before execution.
+3. Emit complete signature metadata.
+4. Stay within tier-specific sample/token/latency/timeout budgets.
+5. Keep runtime LLM judgment off for PR and nightly blocking tiers.
+
+Tier policy:
+
+1. `paper_core`
+   - PR blocking
+   - small representative frozen dataset
+2. `paper_full`
+   - nightly blocking
+   - broader frozen dataset
+3. `paper_audit`
+   - weekly non-blocking
+   - high-difficulty frozen dataset with warning-only budget behavior
 
 ## Change Control Requirements For Coding Agents
 

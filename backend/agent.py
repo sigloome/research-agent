@@ -415,7 +415,17 @@ class MainAgent:
             user_preferences=user_preferences,
             conversation_history=conversation_history,
         )
-        _ = runtime_profile
+        if runtime_profile is not None:
+            runtime_result = await self.multi_agent_runtime.run(
+                query=query,
+                profile=runtime_profile,
+                user_preferences=user_preferences,
+            )
+            full_query = (
+                f"{full_query}\n\n"
+                f"{runtime_result.answer_context}\n\n"
+                f"Verifier summary: {runtime_result.verifier_summary}"
+            )
         async for chunk in stream_codex_sdk(
             format_chunk=self._format_chunk,
             query=full_query,

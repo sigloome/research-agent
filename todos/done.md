@@ -219,6 +219,51 @@
   - `tests/backend/test_codex_sdk_runtime.py`
 - Updated `backend/agent.py` to use `stream_codex_sdk` and `_run_codex_sdk`.
 
+## 2026-03-14 (Paper retrieval graph benchmark foundation completed)
+
+- Completed `openspec/changes/paper-retrieval-graph-benchmark-foundation/` end to end:
+  - active `_run_codex_sdk` path honors `runtime_profile`
+  - runtime profiles unified to `baseline / hybrid / graph_expand / graph_verify`
+  - structured retrieval context and coverage audit emitted from `backend/multi_agent_runtime.py`
+  - `graph_expand` now augments related-work retrieval with classic baseline and recent follow-up coverage
+  - paper benchmark runner executes real `MultiAgentRuntime` retrieval against frozen snapshot data and emits aggregate deterministic scores
+  - span grounding upgraded from exact-only source ref matching to semantic same-paper span equivalence with structured-field overlap
+- Added/updated frozen benchmark artifacts:
+  - `evals/datasets/paper_benchmark/`
+  - `evals/fixtures/paper_benchmark/snapshots/papers_snapshot_v1.sqlite`
+  - `scripts/build_paper_benchmark_snapshot.py`
+- Synced tracked artifacts and closure docs:
+  - `openspec/.../tasks.md`
+  - `openspec/.../acceptance-report.md`
+  - `docs/specs/agent-evaluation-standard.md`
+  - `docs/specs/auto-evolving-backend.md`
+- Verification:
+  - `python3 -m pytest -q tests/backend/test_multi_agent_runtime.py tests/backend/test_paper_retrieval_runtime.py tests/backend/test_codex_sdk_runtime.py tests/evals/test_paper_benchmark_contracts.py tests/evals/test_paper_benchmark_evidence.py tests/evals/test_paper_benchmark_gold_scoring.py tests/evals/test_paper_benchmark_runner.py tests/backend/test_multi_agent_runtime_structured.py evals/tests/test_retrieval_prompt_paths.py evals/tests/test_retrieval_prompt_paths_audit.py` -> `58 passed`
+  - `python3 -m evals.runners.run_suite --suite paper_core --params-signature graph_expand --git-commit testsha` -> pass
+
+## 2026-03-14 (Paper retrieval quality upgrades first pass)
+
+- Added follow-up OpenSpec change:
+  - `openspec/changes/paper-retrieval-quality-upgrades/`
+- Implemented first quality-upgrade pass:
+  - real `hybrid` parity in benchmark manifest and runner
+  - lexical + semantic fusion path in `backend/multi_agent_runtime.py`
+  - cluster-aware `graph_expand` merge reason preservation
+  - evidence-item rerank path for `graph_verify`
+  - xval counter-evidence probe path and audit distinction
+- Added deterministic tests for:
+  - semantic-only hybrid candidate behavior
+  - cluster-aware expansion reasons
+  - evidence-item rerank contract
+  - benchmark `hybrid` parity
+- Verification:
+  - `python3 -m pytest -q tests/backend/test_multi_agent_runtime.py tests/backend/test_paper_retrieval_runtime.py tests/backend/test_codex_sdk_runtime.py tests/backend/test_multi_agent_runtime_structured.py tests/evals/test_paper_benchmark_contracts.py tests/evals/test_paper_benchmark_evidence.py tests/evals/test_paper_benchmark_gold_scoring.py tests/evals/test_paper_benchmark_runner.py evals/tests/test_retrieval_prompt_paths.py evals/tests/test_retrieval_prompt_paths_audit.py` -> `63 passed`
+  - `paper_core` profile comparison rerun completed for `baseline / hybrid / graph_expand / graph_verify`
+- Outcome:
+  - implementation contracts completed
+  - proposed quality targets met on frozen `paper_core`
+  - rollout recommendation remains conservative for live traffic until larger-slice verification
+
 ## 2026-03-14
 
 - Performed repo git hygiene pass for generated/runtime artifacts.
@@ -455,3 +500,76 @@
 - Added and executed Playwright e2e test for versioned arXiv route canonicalization:
   - `frontend/tests/e2e/paper-canonical.spec.ts`
   - chromium run: `1 passed`.
+
+## 2026-03-14 (paper retrieval graph benchmark foundation artifacts)
+
+- Created new OpenSpec change scaffold and artifacts:
+  - `openspec/changes/paper-retrieval-graph-benchmark-foundation/`
+- Added proposal, design, tasks, and spec deltas for:
+  - `paper-retrieval-runtime`
+  - `paper-benchmark-governance`
+  - `paper-management`
+- This pass intentionally stopped at SDD artifact creation; implementation and tests remain pending under the new change tasks.
+
+## 2026-03-14 (paper retrieval foundation first runtime + benchmark slice)
+
+- Updated active runtime path in `backend/agent.py` so `_run_codex_sdk` now honors `runtime_profile` and injects retrieval context before answer synthesis.
+- Added deterministic runtime tests:
+  - `tests/backend/test_paper_retrieval_runtime.py`
+- Added deterministic paper benchmark metrics and tests:
+  - `evals/metrics/paper_benchmark.py`
+  - `tests/evals/test_paper_benchmark_contracts.py`
+- Adjusted `tests/backend/test_codex_sdk_runtime.py` to avoid implicit async-plugin dependency in this environment.
+- Verification:
+  - targeted runtime + benchmark tests: `11 passed`
+  - existing retrieval eval suite: `31 passed`
+
+## 2026-03-14 (paper retrieval foundation structured runtime + runner contract)
+
+- Removed superseded benchmark-only OpenSpec change files and consolidated their useful governance requirements into the foundation change.
+- Upgraded `backend/multi_agent_runtime.py` to emit structured retrieval payloads and a serialized `[RetrievalContext]` answer context.
+- Added paper benchmark dataset/manifest/snapshot scaffolding:
+  - `evals/datasets/paper_benchmark/`
+  - `evals/fixtures/paper_benchmark/snapshots/papers_snapshot_v1.sqlite`
+- Extended `evals/runners/run_suite.py` with `build_paper_benchmark_plan(...)` for frozen tier planning, snapshot precondition enforcement, and signature construction.
+- Added deterministic tests for structured runtime output and benchmark runner contracts.
+- Verification:
+  - new targeted tests: `10 passed`
+  - existing retrieval deterministic suite: `31 passed`
+
+## 2026-03-14 (paper benchmark governance docs + CI wiring)
+
+- Updated shared policy docs with paper benchmark governance, blocking/non-blocking tier policy, and required deterministic metrics.
+- Extended `evals/runners/run_suite.py` CLI to expose:
+  - `paper_core`
+  - `paper_full`
+  - `paper_audit`
+- Updated CI workflow to validate paper benchmark planning on PR/push and scheduled runs.
+- Verification:
+  - runner CLI for all three paper suites executed successfully
+  - benchmark runner/contract tests: `7 passed`
+  - retrieval deterministic suite remained green: `31 passed`
+
+## 2026-03-14 (curated paper benchmark datasets and real hash locking)
+
+- Replaced placeholder paper benchmark JSONL files with curated frozen cases containing gold expectations for related-work, comparison, cross-validation, and synthesis tasks.
+- Locked real SHA-256 hashes and actual sample counts into `evals/datasets/paper_benchmark/manifest_v1.json`.
+- Strengthened runner validation to fail on dataset hash mismatch or sample count drift.
+- Extended runtime evidence extraction and benchmark metrics to score structured comparison/xval evidence facets.
+- Verification:
+  - foundation runtime + benchmark tests: `12 passed`
+  - runner CLI for `paper_core/paper_full/paper_audit`: pass
+  - retrieval deterministic suite: `31 passed`
+
+## 2026-03-14 (paper retrieval foundation acceptance closure)
+
+- Added snapshot builder script and deterministic test.
+- Replaced benchmark snapshot placeholder with a real SQLite snapshot containing the curated benchmark paper subset.
+- Extended runner to verify snapshot contains all paper IDs referenced by frozen datasets.
+- Added case-level gold scoring from retrieval context, span-level grounding recall, and acceptance report for the foundation change.
+- Completed runtime profile naming migration to `baseline / hybrid / graph_expand / graph_verify` while keeping legacy aliases compatible.
+- Updated OpenSpec tasks to reflect actual completion status:
+  - all foundation tasks complete
+- Final verification:
+  - foundation-focused suite: `16 passed`
+  - retrieval deterministic suite + runtime structured tests: `37 passed`

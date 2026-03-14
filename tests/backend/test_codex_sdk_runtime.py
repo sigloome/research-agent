@@ -1,12 +1,70 @@
 from __future__ import annotations
 
+import asyncio
 import os
+import sys
+import types
 
 import pytest
 
 
-@pytest.mark.asyncio
-async def test_agent_uses_single_codex_sdk_provider(monkeypatch):
+def test_agent_uses_single_codex_sdk_provider(monkeypatch):
+    if "backend.logging_config" not in sys.modules:
+        logging_mod = types.ModuleType("backend.logging_config")
+
+        class _Logger:
+            def info(self, *_args, **_kwargs):
+                return None
+
+            def warning(self, *_args, **_kwargs):
+                return None
+
+            def error(self, *_args, **_kwargs):
+                return None
+
+            def debug(self, *_args, **_kwargs):
+                return None
+
+        logging_mod.get_logger = lambda *_args, **_kwargs: _Logger()
+        logging_mod.get_rag_logger = lambda *_args, **_kwargs: _Logger()
+        sys.modules["backend.logging_config"] = logging_mod
+    if "structlog" not in sys.modules:
+        structlog = types.ModuleType("structlog")
+        structlog.get_logger = lambda *_args, **_kwargs: types.SimpleNamespace(
+            info=lambda *_a, **_k: None,
+            warning=lambda *_a, **_k: None,
+            error=lambda *_a, **_k: None,
+            debug=lambda *_a, **_k: None,
+        )
+        sys.modules["structlog"] = structlog
+    if "sentence_transformers" not in sys.modules:
+        stub_mod = types.ModuleType("sentence_transformers")
+
+        class _StubSentenceTransformer:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def encode(self, texts):
+                size = len(texts) if texts is not None else 0
+                return [[0.0] * 384 for _ in range(size)]
+
+        stub_mod.SentenceTransformer = _StubSentenceTransformer
+        sys.modules["sentence_transformers"] = stub_mod
+    if "claude_agent_sdk" not in sys.modules:
+        sdk_mod = types.ModuleType("claude_agent_sdk")
+
+        class ClaudeAgentOptions:
+            def __init__(self, **_kwargs):
+                pass
+
+        async def query(*_args, **_kwargs):
+            if False:
+                yield None
+
+        sdk_mod.ClaudeAgentOptions = ClaudeAgentOptions
+        sdk_mod.query = query
+        sys.modules["claude_agent_sdk"] = sdk_mod
+
     from backend.agent import MainAgent
 
     agent = MainAgent()
@@ -18,16 +76,19 @@ async def test_agent_uses_single_codex_sdk_provider(monkeypatch):
 
     monkeypatch.setattr(agent, "_run_codex_sdk", fake_exec, raising=False)
 
-    chunks = [
-        chunk
-        async for chunk in agent.run(
-            query="hello",
-            chat_id="default",
-            user_preferences=None,
-            conversation_history=None,
-            runtime_profile=None,
-        )
-    ]
+    async def _collect():
+        return [
+            chunk
+            async for chunk in agent.run(
+                query="hello",
+                chat_id="default",
+                user_preferences=None,
+                conversation_history=None,
+                runtime_profile=None,
+            )
+        ]
+
+    chunks = asyncio.run(_collect())
 
     assert any('"type": "finish"' in c for c in chunks)
 

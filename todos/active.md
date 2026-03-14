@@ -4,6 +4,11 @@ Last updated: 2026-03-10
 
 ## P0 - Next Implementation Features
 
+- [ ] Paper retrieval quality upgrades
+  - Implement `openspec/changes/paper-retrieval-quality-upgrades/` in strict SDD -> BDD -> TDD -> implementation -> deterministic verification order.
+  - Scope: real `hybrid`, cluster-aware `graph_expand`, evidence-item `graph_verify`, xval counter-evidence retrieval, benchmark manifest parity.
+  - Success metrics are the `paper_core` quality uplifts recorded in the new change proposal.
+
 - [x] Evaluate direct OpenAI runtime simplification
   - Keep current API behavior while reducing unnecessary normalization/control-plane complexity.
   - Identify minimum required reliability hooks (auth preflight, timeout/retry, error envelope).

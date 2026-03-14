@@ -225,6 +225,11 @@ A feature is complete only if all are true:
    - Use `scripts/trigger_evolution.sh` to scaffold follow-up changes when a run fails.
    - Use `scripts/new_evolution_change.sh <change-id> [title]` for manual bootstrap with mandatory sections.
    - Use `scripts/generate_evolution_candidates.sh` to produce manual-assisted candidate task lists (no code changes).
+   - For paper retrieval features, keep frozen benchmark governance active:
+     - PR: `paper_core` blocking
+     - nightly: `paper_full` blocking
+     - weekly: `paper_audit` non-blocking
+   - Blocking paper benchmark tiers MUST restore the configured snapshot before execution and MUST fail if signature metadata is incomplete.
 2. **Phase 1: Assisted Evolution**
    - Auto-generate proposals/candidates; human approves promotions.
 3. **Phase 2: Constrained Autonomy**
@@ -289,3 +294,34 @@ This specification is aligned with:
 1. AlphaEvolve architecture principles for iterative code evolution and evaluator-driven selection.
 2. AI-resistant and system-level agent evaluation practices.
 3. Deterministic-first evaluation policies already adopted in this repository.
+
+## Paper Retrieval Benchmark Rollout Policy
+
+This repository treats paper retrieval benchmark governance as a rollout gate, not just an offline report.
+
+Blocking tiers:
+
+1. `paper_core`
+   - runs on PR / merge validation
+   - blocks on missing snapshot restore
+   - blocks on missing signature fields
+   - blocks on budget violations
+2. `paper_full`
+   - runs on nightly schedule
+   - blocks on missing snapshot restore
+   - blocks on missing signature fields
+   - blocks on budget violations
+
+Non-blocking tier:
+
+1. `paper_audit`
+   - runs on weekly schedule
+   - still requires frozen dataset + signature construction
+   - reports budget or stability warnings without blocking merge
+
+Promotion expectations for paper retrieval changes:
+
+1. New retrieval behavior should first pass deterministic runtime contract tests.
+2. Then it should pass frozen `paper_core` planning and benchmark contract validation.
+3. Promotion to broader rollout should consider `paper_full` stability and cost behavior.
+4. If repeat-run variance exceeds tolerance or graph-expanded profiles fail to outperform baseline consistently, stop rollout and reassess retrieval strategy.

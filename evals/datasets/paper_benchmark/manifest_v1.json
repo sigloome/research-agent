@@ -1,0 +1,71 @@
+{
+  "dataset_version": "paper_bench_v1",
+  "default_seed": 42,
+  "tiers": {
+    "core": {
+      "file": "/Users/bytedance/code/anti-demo/evals/datasets/paper_benchmark/core_v1.jsonl",
+      "sample_count": 6,
+      "snapshot_id": "papers_snapshot_v1",
+      "snapshot_path": "/Users/bytedance/code/anti-demo/evals/fixtures/paper_benchmark/snapshots/papers_snapshot_v1.sqlite",
+      "hash": "sha256:bfae90cb0f3b0073089983ce5028c81a01216f91d1f211b8219d46621bab7572",
+      "blocking": true,
+      "budget": {
+        "sample_count_max": 6,
+        "mean_total_tokens_max": 5000,
+        "p95_latency_ms_max": 8000,
+        "timeout_rate_max": 0.0
+      }
+    },
+    "full": {
+      "file": "/Users/bytedance/code/anti-demo/evals/datasets/paper_benchmark/full_v1.jsonl",
+      "sample_count": 8,
+      "snapshot_id": "papers_snapshot_v1",
+      "snapshot_path": "/Users/bytedance/code/anti-demo/evals/fixtures/paper_benchmark/snapshots/papers_snapshot_v1.sqlite",
+      "hash": "sha256:f146cf5450a8988d1048f1b4f12a37af258b38b8cb97129f3a66ca1b01be3239",
+      "blocking": true,
+      "budget": {
+        "sample_count_max": 8,
+        "mean_total_tokens_max": 7000,
+        "p95_latency_ms_max": 12000,
+        "timeout_rate_max": 0.02
+      }
+    },
+    "audit": {
+      "file": "/Users/bytedance/code/anti-demo/evals/datasets/paper_benchmark/audit_v1.jsonl",
+      "sample_count": 4,
+      "snapshot_id": "papers_snapshot_v1",
+      "snapshot_path": "/Users/bytedance/code/anti-demo/evals/fixtures/paper_benchmark/snapshots/papers_snapshot_v1.sqlite",
+      "hash": "sha256:250c137321d1c217a74596e90fa351f1b1a66fc057c1b5a65404419f0ee07d0c",
+      "blocking": false,
+      "budget": {
+        "sample_count_max": 4,
+        "mean_total_tokens_max": 7000,
+        "p95_latency_ms_max": 12000,
+        "timeout_rate_max": 0.02
+      }
+    }
+  },
+  "params_signatures": {
+    "baseline": {
+      "topk": 20,
+      "graph_hop": 0,
+      "max_evidence_per_paper": 2
+    },
+    "hybrid": {
+      "topk": 24,
+      "graph_hop": 0,
+      "max_evidence_per_paper": 3
+    },
+    "graph_expand": {
+      "topk": 30,
+      "graph_hop": 1,
+      "max_evidence_per_paper": 3
+    },
+    "graph_verify": {
+      "topk": 30,
+      "graph_hop": 1,
+      "critic_threshold": 0.6,
+      "max_evidence_per_paper": 3
+    }
+  }
+}
