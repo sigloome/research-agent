@@ -190,157 +190,64 @@ const ThinkingProcess = memo(function ThinkingProcess({ steps }: { steps: string
 */
 
 
-// Helper to parse content with Stream Protocol - UNCHANGED
 function parseContent(fullText: string) {
-  // 1. Parse Research Plan
-
-  const planValues: ResearchTask[] = [];
-  const seenTasks = new Set<string>();
-
   const planInitRegex = /<<<PlanInit:\s*([\s\S]*?)>>>/g;
-
-  for (const m of fullText.matchAll(planInitRegex)) {
-    console.log("Found PlanInit marker");
-    try {
-      const parsed = JSON.parse(m[1].trim());
-      // Handle both legacy [strings] and new [{id, description, status}] format
-      parsed.forEach((t: any) => {
-        const label = typeof t === 'string' ? t : t.description;
-        const id = typeof t === 'string' ? undefined : t.id;
-        // De-duplicate by ID if available, else by label
-        const key = id || label;
-
-        if (!seenTasks.has(key)) {
-          planValues.push({
-            id,
-            label,
-            status: typeof t === 'string' ? 'pending' : (t.status || 'pending')
-          });
-          seenTasks.add(key);
-        }
-      });
-    } catch (e) {
-      console.error("Failed to parse PlanInit", e);
-    }
-  }
-
-  // 1b. Parse Plan Updates (Additions)
   const planUpdateRegex = /<<<PlanUpdate:\s*([\s\S]*?)>>>/g;
-  for (const m of fullText.matchAll(planUpdateRegex)) {
-    try {
-      const parsed = JSON.parse(m[1].trim());
-      parsed.forEach((t: any) => {
-        const label = typeof t === 'string' ? t : t.description;
-        const id = typeof t === 'string' ? undefined : t.id;
-        const key = id || label;
-
-        if (!seenTasks.has(key)) {
-          planValues.push({
-            id,
-            label,
-            status: typeof t === 'string' ? 'pending' : (t.status || 'pending')
-          });
-          seenTasks.add(key);
-        }
-      });
-    } catch (e) {
-      console.error("Failed to parse PlanUpdate", e);
-    }
-  }
-
-  // Step Start/End logic...
   const stepStartRegex = /<<<StepStart:\s*([\s\S]*?)>>>/g;
-  const runningIds = new Set<string>();
-  const runningLabels = new Set<string>(); // Legacy fallback
-
-  for (const m of fullText.matchAll(stepStartRegex)) {
-    try {
-      // Try parsing as JSON object first (New Protocol)
-      if (m[1].trim().startsWith('{')) {
-        const data = JSON.parse(m[1].trim());
-        console.log("Parsed StepStart JSON:", data);
-        if (data.id) runningIds.add(data.id);
-        if (data.description) runningLabels.add(data.description);
-      } else {
-        console.log("Parsed StepStart String:", m[1].trim());
-        // Fallback to raw string
-        runningLabels.add(m[1].trim());
-      }
-    } catch (e) {
-      console.error("StepStart parsing error:", e);
-      runningLabels.add(m[1].trim());
-    }
-  }
-
   const stepEndRegex = /<<<StepEnd:\s*([\s\S]*?)>>>/g;
-  const completedIds = new Set<string>();
-  const completedLabels = new Set<string>();
-
-  for (const m of fullText.matchAll(stepEndRegex)) {
-    try {
-      if (m[1].trim().startsWith('{')) {
-        const data = JSON.parse(m[1].trim());
-        console.log("Parsed StepEnd JSON:", data);
-        if (data.id) completedIds.add(data.id);
-      } else {
-        console.log("Parsed StepEnd String:", m[1].trim());
-        completedLabels.add(m[1].trim());
-      }
-    } catch {
-      completedLabels.add(m[1].trim());
-    }
-  }
-
-  // Update statuses based on IDs first, then labels
-  planValues.forEach(t => {
-    if (t.id) {
-      if (completedIds.has(t.id)) t.status = 'completed';
-      else if (runningIds.has(t.id)) t.status = 'running';
-    } else {
-      if (completedLabels.has(t.label)) t.status = 'completed';
-      else if (runningLabels.has(t.label)) t.status = 'running';
-    }
-  });
-
-  // 2. Parse Tool Logs (Extraction)
-  // Extract "*Running tool: ...*" to separate list
-  // Use robust regex that doesn't depend on surrounding newlines
   const toolRegex = /\*Running tool: ([\s\S]*?)\*/g;
-  const toolSteps: string[] = [];
-  const toolMatches = [...fullText.matchAll(toolRegex)];
-  for (const m of toolMatches) {
-    toolSteps.push(m[1].trim());
-  }
 
-  // 3. Clean Content
-  // NOTE: Primary filtering now happens in backend (content_filter.py)
-  // The backend handles XML tags (<thinking>, <private>, <debug>, <citation>, <summary>, <source>)
-  // and file paths before streaming. These frontend filters are kept as fallbacks.
+  const looksLikeProcessParagraph = (paragraph: string) => {
+    const normalized = paragraph.trim().toLowerCase();
+    if (!normalized) return false;
+
+    const leadingCue = /^(i(?:'m|’m| am|’ll| will| tried| found| checked)|let me|now i|next i|searching|checking|fetching|loading|using|running)\b/.test(normalized);
+    const processSignals = [
+      'tool',
+      'environment',
+      'repo',
+      'module path',
+      'local skill',
+      'local db',
+      'blocked',
+      'inspect the repo',
+      'web arxiv',
+      'primary-source search',
+      'i’ll',
+      "i'll",
+    ];
+
+    return leadingCue && processSignals.some(signal => normalized.includes(signal));
+  };
+
   let cleanContent = fullText
     .replace(planInitRegex, "")
     .replace(planUpdateRegex, "")
     .replace(stepStartRegex, "")
     .replace(stepEndRegex, "")
-    .replace(toolRegex, "") // Remove tools from main text
+    .replace(toolRegex, "")
     .replace(/\(no content\)/g, "")
-    // Fallback: Remove hidden tags that slip through
     .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
     .replace(/<private>[\s\S]*?<\/private>/gi, "")
     .replace(/<debug>[\s\S]*?<\/debug>/gi, "")
-    // Fallback: Transform display tags (in case backend misses them)
     .replace(/<citation\s+url=["']([^"']+)["']\s*>([\s\S]*?)<\/citation>/gi, '[$2]($1)')
     .replace(/<citation>([\s\S]*?)<\/citation>/gi, '*$1*')
     .replace(/<summary>([\s\S]*?)<\/summary>/gi, '\n> $1\n')
     .replace(/<source\s+url=["']([^"']+)["']\s*>([\s\S]*?)<\/source>/gi, '\n📄 **Source**: [$2]($1)\n')
     .replace(/<source>([\s\S]*?)<\/source>/gi, '\n📄 **Source**: $1\n')
-    // Fallback: Remove file paths
     .replace(/^\/(?:Users|home|var|tmp)\/[^\n]+$/gm, "")
     .replace(/`\/(?:Users|home|var|tmp)\/[^`]+`/g, "")
-    // Clean up whitespace
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  return { cleanContent, researchTasks: planValues, toolSteps };
+  cleanContent = cleanContent
+    .split(/\n\s*\n/)
+    .filter(paragraph => !looksLikeProcessParagraph(paragraph))
+    .join('\n\n')
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return { cleanContent };
 }
 
 // Markdown components definition moved outside to prevent re-creation
@@ -355,18 +262,7 @@ const createMarkdownComponents = (navigate: any, onLibrarySearch: any) => ({
   h1: ({ children }: any) => <h1 className="text-xl font-bold text-stone-900 mb-3">{children}</h1>,
   h2: ({ children }: any) => <h2 className="text-lg font-semibold text-stone-900 mt-4 mb-2">{children}</h2>,
   h3: ({ children }: any) => <h3 className="text-base font-semibold text-stone-800 mt-3 mb-2">{children}</h3>,
-  p: ({ children }: any) => {
-    const text = Array.isArray(children) ? children.join('') : String(children);
-    if (text.startsWith('Searching for:') || text.includes('Searching for:')) {
-      return (
-        <div className="flex items-center gap-2 text-xs text-stone-500 my-1 bg-stone-50 px-2 py-1 rounded w-fit border border-stone-100">
-          <Loader2 size={10} className="stroke-stone-400 shrink-0" />
-          {children}
-        </div>
-      )
-    }
-    return <p className="text-stone-700 leading-relaxed mb-3">{children}</p>
-  },
+  p: ({ children }: any) => <p className="text-stone-700 leading-relaxed mb-3">{children}</p>,
   li: ({ children }: any) => <li className="text-stone-700 mb-1">{children}</li>,
   strong: ({ children }: any) => <strong className="font-semibold text-stone-900">{children}</strong>,
   a: ({ href, children }: any) => {
@@ -468,6 +364,13 @@ interface ToolTimelineItem {
   isError: boolean;
 }
 
+interface ProgressStripProps {
+  items: ToolTimelineItem[];
+  stepCount: number;
+  isStreaming: boolean;
+  hasContent: boolean;
+}
+
 function extractMessageText(message: UIMessage): string {
   return message.parts
     .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
@@ -529,30 +432,157 @@ function getLastUserText(messages: UIMessage[]): string {
   return '';
 }
 
-const ToolTimeline = memo(function ToolTimeline({ items }: { items: ToolTimelineItem[] }) {
-  if (items.length === 0) return null;
+function extractStepCount(message: UIMessage): number {
+  return message.parts.filter(part => part.type === 'step-start').length;
+}
+
+function inferProgressStage(items: ToolTimelineItem[], stepCount: number, isStreaming: boolean, hasContent: boolean) {
+  const runningTool = items.find(item => item.isRunning);
+  const latestTool = items[items.length - 1];
+  const activeTool = runningTool ?? latestTool;
+  const toolDescriptor = activeTool ? `${activeTool.name} ${activeTool.description}`.toLowerCase() : '';
+
+  if (activeTool) {
+    if (/search|query|web|arxiv|paper|source|knowledge/.test(toolDescriptor)) {
+      return {
+        summary: 'Searching sources',
+        detail: 'Checking available references',
+      };
+    }
+    if (/read|fetch|load|open/.test(toolDescriptor)) {
+      return {
+        summary: 'Reading context',
+        detail: 'Inspecting relevant materials',
+      };
+    }
+    return {
+      summary: 'Running tools',
+      detail: 'Gathering supporting context',
+    };
+  }
+
+  if (isStreaming) {
+    if (!hasContent) {
+      return {
+        summary: stepCount > 1 ? 'Reviewing context' : 'Analyzing the request',
+        detail: 'Preparing the response plan',
+      };
+    }
+    return {
+      summary: 'Drafting the response',
+      detail: 'Organizing the answer',
+    };
+  }
+
+  return {
+    summary: 'Response ready',
+    detail: stepCount > 1 ? `${stepCount} structured steps completed` : 'Final answer generated',
+  };
+}
+
+const ToolTimeline = memo(function ToolTimeline({ items, stepCount, isStreaming, hasContent }: ProgressStripProps) {
+  const hasToolItems = items.length > 0;
+  const hasRunningTools = items.some(item => item.isRunning);
+  const hasRunning = hasRunningTools || isStreaming;
+  const shouldRender = hasToolItems || isStreaming;
+  if (!shouldRender) return null;
+
+  const [isExpanded, setIsExpanded] = useState(hasRunning);
+  const [hasStreamedOnce, setHasStreamedOnce] = useState(isStreaming);
+
+  useEffect(() => {
+    if (isStreaming) {
+      setHasStreamedOnce(true);
+    }
+  }, [isStreaming]);
+
+  useEffect(() => {
+    if (hasRunning) {
+      setIsExpanded(true);
+      return;
+    }
+    const timer = setTimeout(() => setIsExpanded(false), 1500);
+    return () => clearTimeout(timer);
+  }, [hasRunning, items.length]);
+
+  const completedCount = items.filter(item => !item.isRunning && !item.isError).length;
+  const errorCount = items.filter(item => item.isError).length;
+  const inferredStage = inferProgressStage(items, stepCount, isStreaming, hasContent);
+  const summaryLabel = hasToolItems
+    ? (
+      errorCount > 0
+        ? `${items.length} process item${items.length === 1 ? '' : 's'}, ${errorCount} issue${errorCount === 1 ? '' : 's'}`
+        : `${completedCount}/${items.length} process item${items.length === 1 ? '' : 's'} complete`
+    )
+    : inferredStage.summary;
+  const visibleItems = hasToolItems
+    ? items
+    : [{
+      id: isStreaming ? 'progress-active' : 'progress-complete',
+      name: isStreaming ? 'Working' : 'Completed',
+      state: isStreaming ? 'running' : 'completed',
+      description: inferredStage.detail,
+      isRunning: isStreaming,
+      isError: false,
+    }];
+  const headerLabel = hasRunning
+    ? 'Processing'
+    : hasToolItems || hasStreamedOnce
+      ? 'Process Summary'
+      : 'Status';
 
   return (
-    <div className="mb-3 rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2">
-      <p className="mb-2 text-xs font-semibold text-blue-800">Tool Progress</p>
-      <div className="space-y-1.5">
-        {items.map(item => (
-          <div key={item.id} className="flex items-start gap-2 rounded-md bg-white/70 px-2 py-1.5">
-            {item.isRunning ? (
-              <Loader2 size={13} className="mt-0.5 shrink-0 animate-spin text-blue-600" />
-            ) : item.isError ? (
-              <Square size={13} className="mt-0.5 shrink-0 text-red-500" />
-            ) : (
-              <SquareCheck size={13} className="mt-0.5 shrink-0 text-green-600" />
-            )}
-            <div className="min-w-0">
-              <p className="truncate text-xs font-medium text-blue-900">{item.name}</p>
-              <p className="truncate text-xs text-blue-700">{item.description}</p>
-              <p className="text-[10px] uppercase tracking-wide text-blue-500">{item.state}</p>
+    <div className={clsx(
+      "mb-3 rounded-lg border px-3 py-2 transition-all",
+      isExpanded ? "border-blue-100 bg-blue-50/60" : "border-stone-200 bg-stone-50/90"
+    )}>
+      <button
+        type="button"
+        onClick={() => setIsExpanded(prev => !prev)}
+        className="flex w-full items-center justify-between gap-3 text-left"
+      >
+        <div className="min-w-0">
+          <p className={clsx(
+            "text-xs font-semibold",
+            isExpanded ? "text-blue-800" : "text-stone-700"
+          )}>
+            {headerLabel}
+          </p>
+          <p className={clsx(
+            "truncate text-[11px]",
+            isExpanded ? "text-blue-700" : "text-stone-500"
+          )}>
+            {summaryLabel}
+          </p>
+        </div>
+        <span className={clsx(
+          "text-[10px] uppercase tracking-wide",
+          isExpanded ? "text-blue-500" : "text-stone-400"
+        )}>
+          {isExpanded ? "Hide" : "Show"}
+        </span>
+      </button>
+
+      {isExpanded && (
+        <div className="mt-2 space-y-1.5">
+          {visibleItems.map(item => (
+            <div key={item.id} className="flex items-start gap-2 rounded-md bg-white/70 px-2 py-1.5">
+              {item.isRunning ? (
+                <Loader2 size={13} className="mt-0.5 shrink-0 animate-spin text-blue-600" />
+              ) : item.isError ? (
+                <Square size={13} className="mt-0.5 shrink-0 text-red-500" />
+              ) : (
+                <SquareCheck size={13} className="mt-0.5 shrink-0 text-green-600" />
+              )}
+              <div className="min-w-0">
+                <p className="truncate text-xs font-medium text-blue-900">{item.name}</p>
+                <p className="truncate text-xs text-blue-700">{item.description}</p>
+                <p className="text-[10px] uppercase tracking-wide text-blue-500">{item.state}</p>
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 });
@@ -567,16 +597,20 @@ export interface ChatInterfaceHandle {
 const AssistantMessage = memo(function AssistantMessage({
   content,
   toolTimeline,
+  stepCount,
+  isStreaming,
   onRetry,
   onLibrarySearch,
 }: {
   content: string;
   toolTimeline: ToolTimelineItem[];
+  stepCount: number;
+  isStreaming?: boolean;
   onRetry?: () => void;
   onLibrarySearch?: (query: string) => void;
 }) {
   // Memoize the parsing logic effectively
-  const { cleanContent, researchTasks } = useMemo(() => parseContent(content), [content]);
+  const { cleanContent } = useMemo(() => parseContent(content), [content]);
 
   const navigate = useNavigate();
   const [isSaving, setIsSaving] = useState(false);
@@ -639,8 +673,12 @@ const AssistantMessage = memo(function AssistantMessage({
 
   return (
     <div className="flex flex-col gap-2">
-      <ToolTimeline items={toolTimeline} />
-      {researchTasks.length > 0 && <ResearchPlan tasks={researchTasks} />}
+      <ToolTimeline
+        items={toolTimeline}
+        stepCount={stepCount}
+        isStreaming={Boolean(isStreaming)}
+        hasContent={hasContent}
+      />
 
       {hasContent && (
         <div className="bg-white rounded-xl shadow-sm overflow-hidden group">
@@ -896,10 +934,12 @@ const ChatInterface = forwardRef<ChatInterfaceHandle, ChatInterfaceProps>(({ onP
 
     const text = inputValue.trim();
     const messageId = editingMessageId ?? undefined;
+    setInputValue('');
+    setEditingMessageId(null);
     const sent = await sendMessage(text, messageId ? { messageId } : undefined);
-    if (sent) {
-      setInputValue('');
-      setEditingMessageId(null);
+    if (!sent) {
+      setInputValue(text);
+      setEditingMessageId(messageId ?? null);
     }
   };
 
@@ -1050,6 +1090,8 @@ const ChatInterface = forwardRef<ChatInterfaceHandle, ChatInterfaceProps>(({ onP
                     <AssistantMessage
                       content={extractMessageText(m)}
                       toolTimeline={extractToolTimeline(m)}
+                      stepCount={extractStepCount(m)}
+                      isStreaming={isStreaming && m.id === messages[messages.length - 1]?.id}
                       onRetry={() => handleRetry(m.id)}
                       onLibrarySearch={onLibrarySearch}
                     />

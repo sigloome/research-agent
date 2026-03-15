@@ -159,6 +159,10 @@ class MainAgent:
         - **Be direct**: Provide the answer, not a plan to find it
         - **Cite sources**: Include URLs for web sources
         - **Handle limitations gracefully**: If tools fail, explain what happened and what you can still provide
+        - **Do not narrate internal process in user-visible text**: avoid phrases like
+          "I'll check", "let me search", "now I will", "next I will", or tool-by-tool commentary
+        - **Keep progress structured**: if process description is useful for internal control,
+          put it inside hidden tags rather than final answer text
         
         ## Response Style
         
@@ -328,6 +332,7 @@ class MainAgent:
         user_preferences: Optional[str] = None,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         runtime_profile: Optional[RuntimeProfile] = None,
+        provider_thread_id: Optional[str] = None,
     ):
         """
         Async generator that yields text chunks from Claude Agent SDK Client.
@@ -347,6 +352,7 @@ class MainAgent:
                 user_preferences=user_preferences,
                 conversation_history=conversation_history,
                 runtime_profile=runtime_profile,
+                provider_thread_id=provider_thread_id,
             ):
                 yield msg
         except Exception as e:
@@ -387,6 +393,7 @@ class MainAgent:
         user_preferences: Optional[str] = None,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         runtime_profile: Optional[RuntimeProfile] = None,
+        provider_thread_id: Optional[str] = None,
     ):
         """
         Internal async generator to run the agent and yield formatted messages.
@@ -400,6 +407,7 @@ class MainAgent:
             user_preferences=user_preferences,
             conversation_history=conversation_history,
             runtime_profile=runtime_profile,
+            provider_thread_id=provider_thread_id,
         ):
             yield chunk
 
@@ -409,28 +417,40 @@ class MainAgent:
         user_preferences: Optional[str],
         conversation_history: Optional[List[Dict[str, str]]],
         runtime_profile: Optional[RuntimeProfile],
+        provider_thread_id: Optional[str],
     ):
         full_query = self._build_full_query(
             query=query,
             user_preferences=user_preferences,
-            conversation_history=conversation_history,
+            conversation_history=None if provider_thread_id else conversation_history,
         )
+        fallback_query = None
+        if provider_thread_id:
+            fallback_query = self._build_full_query(
+                query=query,
+                user_preferences=user_preferences,
+                conversation_history=conversation_history,
+            )
         if runtime_profile is not None:
             runtime_result = await self.multi_agent_runtime.run(
                 query=query,
                 profile=runtime_profile,
                 user_preferences=user_preferences,
             )
-            full_query = (
-                f"{full_query}\n\n"
+            runtime_context = (
                 f"{runtime_result.answer_context}\n\n"
                 f"Verifier summary: {runtime_result.verifier_summary}"
             )
+            full_query = f"{full_query}\n\n{runtime_context}"
+            if fallback_query is not None:
+                fallback_query = f"{fallback_query}\n\n{runtime_context}"
         async for chunk in stream_codex_sdk(
             format_chunk=self._format_chunk,
             query=full_query,
             cwd=self.cwd,
             codex_model=self.codex_model,
+            thread_id=provider_thread_id,
+            fallback_query=fallback_query,
         ):
             yield chunk
 

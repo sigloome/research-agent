@@ -28,6 +28,62 @@ if "sentence_transformers" not in sys.modules:
     stub_mod.SentenceTransformer = _StubSentenceTransformer
     sys.modules["sentence_transformers"] = stub_mod
 
+if "structlog" not in sys.modules:
+    structlog = types.ModuleType("structlog")
+    structlog.get_logger = lambda *_args, **_kwargs: types.SimpleNamespace(
+        info=lambda *_a, **_k: None,
+        warning=lambda *_a, **_k: None,
+        error=lambda *_a, **_k: None,
+        debug=lambda *_a, **_k: None,
+        bind=lambda **_kwargs: types.SimpleNamespace(
+            info=lambda *_a, **_k: None,
+            warning=lambda *_a, **_k: None,
+            error=lambda *_a, **_k: None,
+            debug=lambda *_a, **_k: None,
+        ),
+    )
+    sys.modules["structlog"] = structlog
+
+if "backend.logging_config" not in sys.modules:
+    logging_mod = types.ModuleType("backend.logging_config")
+
+    class _Logger:
+        def info(self, *_args, **_kwargs):
+            return None
+
+        def warning(self, *_args, **_kwargs):
+            return None
+
+        def error(self, *_args, **_kwargs):
+            return None
+
+        def debug(self, *_args, **_kwargs):
+            return None
+
+        def bind(self, **_kwargs):
+            return self
+
+    logging_mod.get_logger = lambda *_args, **_kwargs: _Logger()
+    logging_mod.get_rag_logger = lambda *_args, **_kwargs: _Logger()
+    logging_mod.get_api_logger = lambda *_args, **_kwargs: _Logger()
+    logging_mod.get_skill_logger = lambda *_args, **_kwargs: _Logger()
+    sys.modules["backend.logging_config"] = logging_mod
+
+if "claude_agent_sdk" not in sys.modules:
+    sdk_mod = types.ModuleType("claude_agent_sdk")
+
+    class ClaudeAgentOptions:
+        def __init__(self, **_kwargs):
+            pass
+
+    async def query(*_args, **_kwargs):
+        if False:
+            yield None
+
+    sdk_mod.ClaudeAgentOptions = ClaudeAgentOptions
+    sdk_mod.query = query
+    sys.modules["claude_agent_sdk"] = sdk_mod
+
 
 @pytest.fixture(scope="session")
 def project_root():
@@ -148,6 +204,17 @@ def temp_db():
             role TEXT NOT NULL,
             content TEXT NOT NULL,
             created_at TEXT NOT NULL,
+            FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS chat_runtime_state (
+            chat_id TEXT PRIMARY KEY,
+            provider_thread_id TEXT,
+            last_mode TEXT,
+            last_error TEXT,
+            updated_at TEXT NOT NULL,
             FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
         )
     ''')

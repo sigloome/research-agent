@@ -182,6 +182,17 @@ def init_db():
         )
     ''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id)')
+
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS chat_runtime_state (
+            chat_id TEXT PRIMARY KEY,
+            provider_thread_id TEXT,
+            last_mode TEXT,
+            last_error TEXT,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
+        )
+    ''')
     
     # Migrate existing paper_id references to note_links table
     try:
@@ -1131,6 +1142,41 @@ def get_chat_history(chat_id: str) -> List[Dict[str, Any]]:
     conn.close()
     
     return [dict(row) for row in rows]
+
+
+def get_chat_runtime_state(chat_id: str) -> Optional[Dict[str, Any]]:
+    """Get persisted runtime continuation state for a chat."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('SELECT * FROM chat_runtime_state WHERE chat_id = ?', (chat_id,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def upsert_chat_runtime_state(
+    chat_id: str,
+    provider_thread_id: Optional[str],
+    last_mode: Optional[str] = None,
+    last_error: Optional[str] = None,
+) -> None:
+    """Create or update runtime continuation state for a chat."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        '''
+        INSERT INTO chat_runtime_state (chat_id, provider_thread_id, last_mode, last_error, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(chat_id) DO UPDATE SET
+            provider_thread_id = excluded.provider_thread_id,
+            last_mode = excluded.last_mode,
+            last_error = excluded.last_error,
+            updated_at = excluded.updated_at
+        ''',
+        (chat_id, provider_thread_id, last_mode, last_error, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
 
 
 if __name__ == "__main__":

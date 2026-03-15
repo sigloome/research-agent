@@ -133,12 +133,19 @@ Required evals:
 4. `RET-04` missing-local fallback behavior.
 5. `RET-05` hidden-tag/path leakage prevention.
 6. `AGT-08` dynamic prompt wiring regression (`get_system_prompt` behavior).
+7. `AGT-24` historical chat continuation behavior:
+   - valid persisted provider thread resumes without transcript duplication in the visible answer body
+   - invalid persisted provider thread falls back to transcript replay and still returns a continued answer
+8. `AGT-25` process-output minimization:
+   - final assistant text must not contain explicit process narration markers or hidden-tag leakage
+   - tool/process visibility must remain available through structured stream parts
 
 Required deterministic methods:
 
 1. Streamed UI-message chunk parsing for tool traces (`tool-input-*`, `tool-output-*`).
 2. Citation URL validation.
 3. Output hygiene regex checks.
+4. Runtime-state fixture replay for stored-thread resume and replay fallback behavior.
 
 ### A3: Preference sync mini-agent
 

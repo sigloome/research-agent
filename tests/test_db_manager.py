@@ -77,3 +77,20 @@ def test_delete_chat_cascades_messages(mock_db_path):
     conn.close()
     
     assert count == 0
+
+
+def test_chat_runtime_state_upsert(mock_db_path):
+    chat_id = manager.create_chat("Runtime Test")
+
+    manager.upsert_chat_runtime_state(chat_id, "thread-1", last_mode="fresh", last_error=None)
+    state = manager.get_chat_runtime_state(chat_id)
+    assert state is not None
+    assert state["provider_thread_id"] == "thread-1"
+    assert state["last_mode"] == "fresh"
+
+    manager.upsert_chat_runtime_state(chat_id, None, last_mode="replay", last_error="resume failed")
+    updated = manager.get_chat_runtime_state(chat_id)
+    assert updated is not None
+    assert updated["provider_thread_id"] is None
+    assert updated["last_mode"] == "replay"
+    assert updated["last_error"] == "resume failed"

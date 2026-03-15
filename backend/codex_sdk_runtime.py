@@ -7,6 +7,8 @@ import shutil
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional
 
+from backend.content_filter import ContentFilter, StreamingContentFilter
+
 
 def _parse_json_line(line: str) -> Optional[Dict[str, Any]]:
     stripped = (line or "").strip()
@@ -30,6 +32,8 @@ class _CodexUiEventMapper:
         self.usage: Dict[str, Any] = {}
         self.observed_native_tool = False
         self.agent_message_text: Dict[str, str] = {}
+        self.text_filter = StreamingContentFilter()
+        self.snapshot_filter = ContentFilter()
 
     def _start_if_needed(self, out: List[Dict[str, Any]]) -> None:
         if self.started:
@@ -44,15 +48,16 @@ class _CodexUiEventMapper:
         if not isinstance(text, str) or not text:
             return
         msg_id = str(item.get("id") or "agent-message")
+        filtered_text = self.snapshot_filter.filter_text(text)
         prev = self.agent_message_text.get(msg_id, "")
-        if prev == text:
+        if prev == filtered_text:
             return
-        delta = text[len(prev):] if text.startswith(prev) else text
+        delta = filtered_text[len(prev):] if filtered_text.startswith(prev) else filtered_text
         if not delta:
             return
         self._start_if_needed(out)
         out.append({"type": "text-delta", "id": self.text_part_id, "delta": delta})
-        self.agent_message_text[msg_id] = text
+        self.agent_message_text[msg_id] = filtered_text
 
     def feed_line(self, raw: str) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
@@ -68,13 +73,26 @@ class _CodexUiEventMapper:
         evt_type = str(event.get("type", ""))
         if evt_type in {"thread.started", "turn.started"}:
             self._start_if_needed(out)
+            if evt_type == "thread.started" and isinstance(event.get("thread_id"), str):
+                out.append(
+                    {
+                        "type": "data-provider-thread",
+                        "data": {"threadId": event["thread_id"]},
+                    }
+                )
             return out
 
         if evt_type in {"response.output_text.delta", "output_text.delta"}:
             delta = event.get("delta")
             if isinstance(delta, str) and delta:
-                self._start_if_needed(out)
-                out.append({"type": "text-delta", "id": self.text_part_id, "delta": delta})
+                filtered_delta = (
+                    delta
+                    if "<" not in delta and "`/" not in delta and "/Users/" not in delta
+                    else self.text_filter.filter_chunk(delta)
+                )
+                if filtered_delta:
+                    self._start_if_needed(out)
+                    out.append({"type": "text-delta", "id": self.text_part_id, "delta": filtered_delta})
             return out
 
         if evt_type in {"item.started", "item.updated", "item.completed"}:
@@ -137,6 +155,9 @@ class _CodexUiEventMapper:
     def finalize(self, return_code: int) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         self._start_if_needed(out)
+        remaining = self.text_filter.flush()
+        if remaining:
+            out.append({"type": "text-delta", "id": self.text_part_id, "delta": remaining})
         if return_code != 0 and not self.emitted_error:
             details = "; ".join(self.diagnostics[-3:]) if self.diagnostics else "codex exited non-zero"
             out.append({"type": "error", "errorText": details})
@@ -255,6 +276,8 @@ async def stream_codex_sdk(
     cwd: Path,
     codex_model: str,
     profile: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    fallback_query: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """Run local @openai/codex-sdk adapter and stream UI-message SSE chunks."""
     node_bin = shutil.which("node")
@@ -298,6 +321,8 @@ async def stream_codex_sdk(
         "networkAccessEnabled": True,
         "codexEnv": _build_codex_runtime_env(cwd, runtime_home),
     }
+    if thread_id:
+        payload["threadId"] = thread_id
     config_overrides_raw = os.environ.get("CODEX_CONFIG_OVERRIDES_JSON", "").strip()
     if config_overrides_raw:
         try:
@@ -310,31 +335,105 @@ async def stream_codex_sdk(
     if profile:
         payload["profile_note"] = profile
 
-    proc = await asyncio.create_subprocess_exec(
-        node_bin,
-        str(adapter_path),
-        cwd=str(cwd),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        stdin=asyncio.subprocess.PIPE,
-    )
+    async def _run_attempt(
+        attempt_payload: Dict[str, Any],
+        *,
+        mode: str,
+        cautious: bool,
+        fallback_used: bool,
+        fallback_error: Optional[str],
+        attempt_result: Dict[str, Any],
+    ) -> AsyncGenerator[str, None]:
+        attempt_result["success"] = False
+        proc = await asyncio.create_subprocess_exec(
+            node_bin,
+            str(adapter_path),
+            cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            stdin=asyncio.subprocess.PIPE,
+        )
 
-    if proc.stdin is not None:
-        proc.stdin.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
-        await proc.stdin.drain()
-        proc.stdin.close()
+        if proc.stdin is not None:
+            proc.stdin.write(json.dumps(attempt_payload, ensure_ascii=False).encode("utf-8"))
+            await proc.stdin.drain()
+            proc.stdin.close()
 
-    mapper = _CodexUiEventMapper()
-    while True:
-        if proc.stdout is None:
-            break
-        raw = await proc.stdout.readline()
-        if not raw:
-            break
-        line = raw.decode("utf-8", errors="replace").rstrip("\n")
-        for event in mapper.feed_line(line):
+        mapper = _CodexUiEventMapper()
+        mode_event = {
+            "type": "data-chat-runtime",
+            "data": {
+                "mode": mode,
+                "fallbackUsed": fallback_used,
+                "error": fallback_error,
+            },
+        }
+        commit_types = {"text-delta", "tool-input-start", "tool-input-available", "tool-output-available"}
+        buffered_events: List[Dict[str, Any]] = []
+        committed = not cautious
+        if committed:
+            yield format_chunk(mode_event)
+
+        while True:
+            if proc.stdout is None:
+                break
+            raw = await proc.stdout.readline()
+            if not raw:
+                break
+            line = raw.decode("utf-8", errors="replace").rstrip("\n")
+            mapped = mapper.feed_line(line)
+            if committed:
+                for event in mapped:
+                    yield format_chunk(event)
+                continue
+            buffered_events.extend(mapped)
+            if any(event.get("type") in commit_types for event in mapped):
+                committed = True
+                yield format_chunk(mode_event)
+                for event in buffered_events:
+                    yield format_chunk(event)
+                buffered_events = []
+
+        rc = await proc.wait()
+        final_events = mapper.finalize(return_code=rc)
+        if cautious and not committed and rc != 0:
+            return
+
+        if not committed:
+            yield format_chunk(mode_event)
+            for event in buffered_events:
+                yield format_chunk(event)
+        for event in final_events:
             yield format_chunk(event)
+        attempt_result["success"] = rc == 0
 
-    rc = await proc.wait()
-    for event in mapper.finalize(return_code=rc):
-        yield format_chunk(event)
+    fallback_error: Optional[str] = None
+    if thread_id:
+        initial_payload = dict(payload)
+        initial_result: Dict[str, Any] = {}
+        async for event in _run_attempt(
+            initial_payload,
+            mode="resume",
+            cautious=True,
+            fallback_used=False,
+            fallback_error=None,
+            attempt_result=initial_result,
+        ):
+            yield event
+        if initial_result.get("success"):
+            return
+        fallback_error = f"resume failed for stored provider thread {thread_id}"
+
+    replay_payload = dict(payload)
+    replay_payload.pop("threadId", None)
+    if fallback_query:
+        replay_payload["input"] = fallback_query
+    async for event in _run_attempt(
+        replay_payload,
+        mode="replay" if thread_id else "fresh",
+        cautious=False,
+        fallback_used=bool(thread_id),
+        fallback_error=fallback_error,
+        attempt_result={},
+    ):
+        yield event

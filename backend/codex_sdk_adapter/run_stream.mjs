@@ -53,7 +53,10 @@ async function main() {
       codexOptions.config = payload.configOverrides;
     }
     const codex = new Codex(codexOptions);
-    const thread = codex.startThread(options);
+    const thread =
+      typeof payload.threadId === "string" && payload.threadId.trim()
+        ? codex.resumeThread(payload.threadId.trim(), options)
+        : codex.startThread(options);
     const { events } = await thread.runStreamed(input);
 
     for await (const event of events) {

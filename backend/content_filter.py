@@ -84,6 +84,46 @@ class ContentFilter:
     
     # Clean up multiple newlines
     MULTIPLE_NEWLINES = re.compile(r'\n{3,}')
+    LEADING_PROCESS_LINES = [
+        re.compile(
+            r'^\s*(?:I(?: am|\'m|’m| will|\'ll|’ll| have|\'ve|’ve)|Let me|Next I(?:\'ll|’ll| will)|Now I(?:\'ll|’ll| will))\b[^\n]*\n?',
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r'^\s*(?:Searching|Reading|Fetching|Loading|Checking|Using|Running|Switching)\b[^\n]*\n?',
+            re.IGNORECASE,
+        ),
+    ]
+    LEADING_PROCESS_SENTENCE_CUES = [
+        re.compile(r'^(?:I(?: am|\'m|’m| will|\'ll|’ll| have|\'ve|’ve)\b|Let me\b|Next I\b|Now I\b)', re.IGNORECASE),
+        re.compile(r'^(?:Searching|Reading|Fetching|Loading|Checking|Using|Running|Switching|Retrying|Querying|Inspecting|Executing)\b', re.IGNORECASE),
+    ]
+    PROCESS_SENTENCE_KEYWORDS = (
+        "checking",
+        "retrying",
+        "executing",
+        "switching",
+        "querying",
+        "loading",
+        "using the",
+        "using built-in",
+        "module path",
+        "runtime",
+        "cli search",
+        "local-paper search",
+        "knowledge database",
+        "now i'm",
+        "now i’m",
+        "next i'll",
+        "next i’ll",
+        "i tried using",
+        "i used",
+        "repo's",
+        "tool,",
+        "tool ",
+        "blocked in this environment",
+        "access is blocked",
+    )
     
     def _transform_citation(self, match: re.Match) -> str:
         """Transform <citation> tag to markdown format."""
@@ -148,9 +188,96 @@ class ContentFilter:
         
         # 4. Clean up extra whitespace
         result = self.MULTIPLE_NEWLINES.sub('\n\n', result)
+        result = self._strip_leading_process_narration(result)
+        result = self._strip_process_paragraphs(result)
+        result = self.MULTIPLE_NEWLINES.sub('\n\n', result)
         result = result.strip()
         
         return result
+
+    def _strip_leading_process_narration(self, text: str) -> str:
+        result = text or ""
+        changed = True
+        while changed and result:
+            changed = False
+            stripped = result.lstrip()
+            leading_offset = len(result) - len(stripped)
+            result = stripped if leading_offset else result
+            for pattern in self.LEADING_PROCESS_LINES:
+                match = pattern.match(result)
+                if match:
+                    result = result[match.end():]
+                    changed = True
+                    break
+            if changed:
+                continue
+
+            sentence_end = self._find_sentence_end(result)
+            if sentence_end is None:
+                break
+            candidate = result[:sentence_end].strip()
+            if self._looks_like_process_sentence(candidate):
+                result = result[sentence_end:].lstrip()
+                changed = True
+        return result
+
+    def _find_sentence_end(self, text: str) -> Optional[int]:
+        for idx, char in enumerate(text):
+            if char == "\n" and idx + 1 < len(text) and text[idx + 1] == "\n":
+                return idx
+            if char in ".!?":
+                next_idx = idx + 1
+                if next_idx >= len(text) or text[next_idx].isspace():
+                    return next_idx
+        return None
+
+    def _looks_like_process_sentence(self, sentence: str) -> bool:
+        if not sentence:
+            return False
+        normalized = sentence.strip()
+        for pattern in self.LEADING_PROCESS_SENTENCE_CUES:
+            if pattern.match(normalized):
+                lowered = normalized.lower()
+                return any(keyword in lowered for keyword in self.PROCESS_SENTENCE_KEYWORDS)
+        lowered = normalized.lower()
+        return any(keyword in lowered for keyword in self.PROCESS_SENTENCE_KEYWORDS[:8])
+
+    def _strip_process_paragraphs(self, text: str) -> str:
+        if not text:
+            return text
+
+        kept: list[str] = []
+        paragraphs = re.split(r"\n\s*\n", text)
+        for paragraph in paragraphs:
+            stripped = paragraph.strip()
+            if not stripped:
+                continue
+            if self._is_process_paragraph(stripped):
+                continue
+            kept.append(stripped)
+        return "\n\n".join(kept)
+
+    def _is_process_paragraph(self, paragraph: str) -> bool:
+        lowered = paragraph.lower()
+        if (
+            "tool" in lowered
+            or "environment" in lowered
+            or "repo" in lowered
+            or "access is blocked" in lowered
+        ) and any(
+            cue in lowered
+            for cue in ("i tried", "i'm", "i’m", "i used", "i checked", "i found", "i ran")
+        ):
+            return True
+
+        sentences = [
+            sentence.strip()
+            for sentence in re.split(r"(?<=[.!?])\s+", paragraph)
+            if sentence.strip()
+        ]
+        if sentences and all(self._looks_like_process_sentence(sentence) for sentence in sentences):
+            return True
+        return False
 
 
 class StreamingContentFilter:

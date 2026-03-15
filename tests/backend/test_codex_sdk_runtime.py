@@ -4,6 +4,7 @@ import asyncio
 import os
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -146,6 +147,124 @@ def test_codex_sdk_parser_maps_output_text_delta_events():
     events = codex_jsonl_to_ui_events(lines, return_code=0)
     deltas = [e.get("delta") for e in events if e.get("type") == "text-delta"]
     assert deltas == ["hello ", "world"]
+
+
+def test_codex_sdk_parser_emits_provider_thread_and_filters_hidden_text():
+    from backend.codex_sdk_runtime import codex_jsonl_to_ui_events
+
+    lines = [
+        '{"type":"thread.started","thread_id":"thread-99"}',
+        '{"type":"response.output_text.delta","delta":"<thinking>hide</thinking>Visible answer"}',
+        '{"type":"turn.completed","usage":{"input_tokens":4,"output_tokens":2}}',
+    ]
+    events = codex_jsonl_to_ui_events(lines, return_code=0)
+    assert any(
+        event.get("type") == "data-provider-thread"
+        and event.get("data", {}).get("threadId") == "thread-99"
+        for event in events
+    )
+    deltas = [event.get("delta") for event in events if event.get("type") == "text-delta"]
+    assert "".join(deltas) == "Visible answer"
+
+
+def test_content_filter_strips_trailing_process_paragraph():
+    from backend.content_filter import ContentFilter
+
+    text = (
+        "Two well-known chain-of-thought papers are:\n\n"
+        "- Chain-of-Thought Prompting Elicits Reasoning in Large Language Models (2022)\n"
+        "- Large Language Models are Zero-Shot Reasoners (2022)\n\n"
+        "I tried using the repo's paper-search tool, but ArXiv access is blocked in this environment."
+    )
+
+    filtered = ContentFilter().filter_text(text)
+
+    assert "Two well-known chain-of-thought papers are" in filtered
+    assert "paper-search tool" not in filtered
+    assert "blocked in this environment" not in filtered
+
+
+def test_stream_codex_sdk_falls_back_after_resume_failure(monkeypatch, tmp_path):
+    from backend import codex_sdk_runtime as runtime
+
+    adapter_path = tmp_path / "backend" / "codex_sdk_adapter"
+    adapter_path.mkdir(parents=True)
+    (adapter_path / "run_stream.mjs").write_text("// adapter", encoding="utf-8")
+    runtime_home = tmp_path / ".runtime-home"
+    runtime_home.mkdir()
+
+    monkeypatch.setattr(runtime, "_ensure_runtime_skill_home", lambda _cwd: runtime_home)
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: "/usr/bin/node")
+
+    class _FakeStdout:
+        def __init__(self, lines):
+            self._lines = [line.encode("utf-8") for line in lines]
+
+        async def readline(self):
+            if not self._lines:
+                return b""
+            return self._lines.pop(0)
+
+    class _FakeStdin:
+        def write(self, _data):
+            return None
+
+        async def drain(self):
+            return None
+
+        def close(self):
+            return None
+
+    class _FakeProc:
+        def __init__(self, lines, rc):
+            self.stdout = _FakeStdout([f"{line}\n" for line in lines])
+            self.stdin = _FakeStdin()
+            self._rc = rc
+
+        async def wait(self):
+            return self._rc
+
+    procs = [
+        _FakeProc(['{"type":"turn.failed","error":{"message":"thread missing"}}'], 1),
+        _FakeProc(
+            [
+                '{"type":"thread.started","thread_id":"thread-new"}',
+                '{"type":"response.output_text.delta","delta":"Recovered"}',
+                '{"type":"turn.completed","usage":{"input_tokens":4,"output_tokens":2}}',
+            ],
+            0,
+        ),
+    ]
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return procs.pop(0)
+
+    monkeypatch.setattr(runtime.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+
+    async def _collect():
+        return [
+            event
+            async for event in runtime.stream_codex_sdk(
+                format_chunk=lambda payload: payload,
+                query="new turn",
+                fallback_query="history + new turn",
+                cwd=Path(tmp_path),
+                codex_model="gpt-test",
+                thread_id="thread-old",
+            )
+        ]
+
+    events = asyncio.run(_collect())
+    runtime_events = [event for event in events if event.get("type") == "data-chat-runtime"]
+    assert runtime_events
+    assert runtime_events[0]["data"]["mode"] == "replay"
+    assert runtime_events[0]["data"]["fallbackUsed"] is True
+    assert any(
+        event.get("type") == "data-provider-thread"
+        and event.get("data", {}).get("threadId") == "thread-new"
+        for event in events
+    )
+    assert any(event.get("type") == "text-delta" and event.get("delta") == "Recovered" for event in events)
 
 
 def test_build_codex_runtime_env_isolates_home_and_skills(monkeypatch, tmp_path):

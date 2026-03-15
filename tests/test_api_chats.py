@@ -111,3 +111,28 @@ def test_api_delete_chat(client):
     # Verify 404 on get history
     get_res = client.get(f"/api/chats/{chat_id}")
     assert get_res.status_code == 404
+
+
+def test_api_chat_updates_runtime_state(client):
+    from backend import app as backend_app
+
+    create_res = client.post("/api/chats", json={"title": "Runtime State"})
+    chat_id = create_res.json()["id"]
+
+    async def mock_generator(*args, **kwargs):
+        yield "data: {\"type\": \"data-chat-runtime\", \"data\": {\"mode\": \"fresh\", \"fallbackUsed\": false, \"error\": null}}\n\n"
+        yield "data: {\"type\": \"data-provider-thread\", \"data\": {\"threadId\": \"thread-42\"}}\n\n"
+        yield "data: {\"type\": \"text-delta\", \"id\": \"text-1\", \"delta\": \"Continued answer\"}\n\n"
+        yield "data: {\"type\": \"finish\", \"finishReason\": \"stop\"}\n\n"
+        yield "data: [DONE]\n\n"
+
+    backend_app.agent.chat_generator = mock_generator
+
+    response = client.post("/api/chat", json={"message": "continue", "session_id": chat_id})
+    assert response.status_code == 200
+    assert b"Continued answer" in response.content
+
+    runtime_state = manager.get_chat_runtime_state(chat_id)
+    assert runtime_state is not None
+    assert runtime_state["provider_thread_id"] == "thread-42"
+    assert runtime_state["last_mode"] == "fresh"

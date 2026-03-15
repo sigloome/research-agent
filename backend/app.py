@@ -113,6 +113,11 @@ def _is_skill_list_intent(text: str) -> bool:
         return False
     return bool(SKILL_LIST_INTENT_RE.search(text))
 
+
+def _coerce_runtime_event(payload: Dict[str, Any]) -> Dict[str, Any]:
+    data = payload.get("data")
+    return data if isinstance(data, dict) else {}
+
 @app.get("/api/health")
 async def health():
     return {
@@ -464,6 +469,8 @@ async def chat_endpoint(request: ChatRequest):
     # Load existing conversation history for context
     # This ensures the agent can continue historical conversations properly
     conversation_history = []
+    existing_runtime_state = manager.get_chat_runtime_state(chat_id) or {}
+    stored_provider_thread_id = existing_runtime_state.get("provider_thread_id")
     try:
         existing_messages = manager.get_chat_history(chat_id)
         if existing_messages:
@@ -538,6 +545,9 @@ async def chat_endpoint(request: ChatRequest):
     async def async_stream_generator():
         full_response = ""
         skill_ingest_sources: List[str] = []
+        observed_provider_thread_id = stored_provider_thread_id
+        observed_runtime_mode: Optional[str] = None
+        runtime_error_text: Optional[str] = None
         try:
             async for chunk in agent.chat_generator(
                 latest_query, 
@@ -545,6 +555,7 @@ async def chat_endpoint(request: ChatRequest):
                 user_preferences=user_preferences,
                 conversation_history=conversation_history,
                 runtime_profile=parse_runtime_profile(request.runtime_profile),
+                provider_thread_id=stored_provider_thread_id,
             ):
                 # Parse SSE UI-message chunks for persistence.
                 try:
@@ -561,6 +572,19 @@ async def chat_endpoint(request: ChatRequest):
                         skill_source = _extract_skill_ingest_source(data)
                         if skill_source and skill_source not in skill_ingest_sources:
                             skill_ingest_sources.append(skill_source)
+                        if data.get("type") == "data-provider-thread":
+                            runtime_data = _coerce_runtime_event(data)
+                            thread_id = runtime_data.get("threadId")
+                            if isinstance(thread_id, str) and thread_id.strip():
+                                observed_provider_thread_id = thread_id.strip()
+                        elif data.get("type") == "data-chat-runtime":
+                            runtime_data = _coerce_runtime_event(data)
+                            mode = runtime_data.get("mode")
+                            if isinstance(mode, str) and mode.strip():
+                                observed_runtime_mode = mode.strip()
+                            error_text = runtime_data.get("error")
+                            if isinstance(error_text, str) and error_text.strip():
+                                runtime_error_text = error_text.strip()
                         if data.get("type") == "text-delta" and isinstance(data.get("delta"), str):
                             full_response += data["delta"]
                         elif data.get("type") == "content" and isinstance(data.get("content"), str):
@@ -583,6 +607,17 @@ async def chat_endpoint(request: ChatRequest):
                 manager.save_message(chat_id, "assistant", full_response)
             else:
                 logger.warning("chat_stream_empty_assistant_response", chat_id=chat_id)
+
+            if observed_runtime_mode == "resume" and not observed_provider_thread_id:
+                observed_provider_thread_id = stored_provider_thread_id
+            if observed_runtime_mode == "replay" and observed_provider_thread_id == stored_provider_thread_id:
+                observed_provider_thread_id = None
+            manager.upsert_chat_runtime_state(
+                chat_id,
+                observed_provider_thread_id,
+                last_mode=observed_runtime_mode or ("resume" if stored_provider_thread_id else "fresh"),
+                last_error=runtime_error_text,
+            )
 
             if skill_ingest_sources:
                 await _run_skill_triggered_ingest(skill_ingest_sources)
